@@ -5,14 +5,16 @@ import time
 from geopy.distance import geodesic
 import json
 import re
+import threading
+from queue import Queue
 
 class AddressDistanceCalculator:
     def __init__(self, root):
         self.root = root
         self.root.title("Address Distance Calculator")
-        self.root.geometry("1200x750")
+        self.root.geometry("1200x800")
         
-        # Configure modern color scheme with glass effect
+        # Configure modern color scheme
         self.colors = {
             'bg_gradient_start': '#0f0c29',
             'bg_gradient_end': '#24243e',
@@ -28,71 +30,48 @@ class AddressDistanceCalculator:
             'shadow': '#00000020'
         }
         
-        # Set background with gradient effect
         self.root.configure(bg='#1a1a2e')
         
         # Store site addresses with geocoding cache
         self.site_addresses = []
-        self.geocode_cache = {}  # Cache for already geocoded addresses
+        self.geocode_cache = {}
+        self.all_results = []  # Store all results for filtering
         
-        # Configure modern styles
+        # Filter states
+        self.filter_vars = {
+            'success': tk.BooleanVar(value=True),
+            'cached': tk.BooleanVar(value=True),
+            'broad': tk.BooleanVar(value=True),
+            'not_found': tk.BooleanVar(value=True)
+        }
+        
+        # Threading control
+        self.calculation_thread = None
+        self.stop_calculation = False
+        self.result_queue = Queue()
+        
+        # Column selection for copying
+        self.selected_columns = set()
+        self.is_selecting_columns = False
+        
+        # Cell selection for Excel-like copying
+        self.cell_selection = {
+            'active': False,
+            'start_item': None,
+            'start_col': None,
+            'end_item': None,
+            'end_col': None,
+            'selected_cells': set()
+        }
+        
         self.setup_modern_styles()
+        self.create_ui()
         
-        # Create main frame with glass effect
-        main_frame = tk.Frame(root, bg='#1a1a2e')
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=20, pady=20)
-        
-        # Configure grid weights
-        root.columnconfigure(0, weight=1)
-        root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(0, weight=1)
-        
-        # Title with modern styling
-        title_frame = tk.Frame(main_frame, bg='#1a1a2e')
-        title_frame.grid(row=0, column=0, sticky=tk.W, pady=(0, 20))
-        
-        title_label = tk.Label(title_frame, text="📍 Address Distance Calculator", 
-                               font=('Segoe UI', 20, 'bold'),
-                               bg='#1a1a2e', fg='white')
-        title_label.pack(anchor=tk.W)
-        
-        subtitle_label = tk.Label(title_frame, text="Calculate optimal routes with precision", 
-                                 font=('Segoe UI', 10),
-                                 bg='#1a1a2e', fg='#9ca3af')
-        subtitle_label.pack(anchor=tk.W)
-        
-        # Technician Address Section with glass effect
-        tech_container = self.create_glass_frame(main_frame, "🏠 Technician Base Address")
-        tech_container.container.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
-        
-        self.tech_address = tk.Text(tech_container, height=2, width=80, 
-                                    font=('Segoe UI', 10),
-                                    bg='white', fg=self.colors['text_primary'],
-                                    relief=tk.FLAT, borderwidth=0,
-                                    insertbackground=self.colors['accent'])
-        self.tech_address.grid(row=0, column=0, pady=8, padx=15, sticky=(tk.W, tk.E))
-        
-        # Site Addresses Section with glass effect
-        site_container = self.create_glass_frame(main_frame, "📋 Site Addresses")
-        site_container.container.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 15))
-        
-        # Instructions with modern styling
-        instruction_text = "💡 Paste addresses in any format: Excel columns, comma-separated, or line-by-line"
-        instruction_label = tk.Label(site_container, text=instruction_text, 
-                                    font=('Segoe UI', 9),
-                                    bg='white', fg=self.colors['accent'])
-        instruction_label.grid(row=0, column=0, sticky=tk.W, pady=(8, 8), padx=15)
-        
-        # Input table container
-        input_container = tk.Frame(site_container, bg='white')
-        input_container.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=15, pady=(0, 10))
-        input_container.columnconfigure(0, weight=1)
-        input_container.rowconfigure(0, weight=1)
-        
-        # Create input table with modern styling
-        input_columns = ('Status', 'Address', 'Suburb', 'State')
-        
-        # Custom style for treeview
+        # Start result queue processor
+        self.process_queue()
+    
+    def setup_modern_styles(self):
+        """Setup modern visual styles"""
         style = ttk.Style()
         style.theme_use('clam')
         
@@ -111,10 +90,80 @@ class AddressDistanceCalculator:
         style.map('Modern.Treeview.Heading',
                  background=[('active', self.colors['accent_hover'])])
         
+        # Selected column heading style
+        style.configure("Selected.Treeview.Heading",
+                       background='#10b981',
+                       foreground="white",
+                       borderwidth=0,
+                       font=('Segoe UI', 9, 'bold'))
+        
+        style.configure("Modern.Horizontal.TProgressbar",
+                       troughcolor='#2d3748',
+                       background=self.colors['accent'],
+                       borderwidth=0,
+                       thickness=6)
+        
+        # Checkbutton style
+        style.configure("Modern.TCheckbutton",
+                       background='white',
+                       foreground=self.colors['text_primary'],
+                       font=('Segoe UI', 9))
+    
+    def create_ui(self):
+        """Create the user interface"""
+        main_frame = tk.Frame(self.root, bg='#1a1a2e')
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=20, pady=20)
+        
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(0, weight=1)
+        
+        # Title
+        title_frame = tk.Frame(main_frame, bg='#1a1a2e')
+        title_frame.grid(row=0, column=0, sticky=tk.W, pady=(0, 20))
+        
+        title_label = tk.Label(title_frame, text="📍 Address Distance Calculator", 
+                               font=('Segoe UI', 20, 'bold'),
+                               bg='#1a1a2e', fg='white')
+        title_label.pack(anchor=tk.W)
+        
+        subtitle_label = tk.Label(title_frame, text="Calculate optimal routes with precision • Powered by OSRM", 
+                                 font=('Segoe UI', 10),
+                                 bg='#1a1a2e', fg='#9ca3af')
+        subtitle_label.pack(anchor=tk.W)
+        
+        # Technician Address Section
+        tech_container = self.create_glass_frame(main_frame, "🏠 Technician Base Address")
+        tech_container.container.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
+        
+        self.tech_address = tk.Text(tech_container, height=2, width=80, 
+                                    font=('Segoe UI', 10),
+                                    bg='white', fg=self.colors['text_primary'],
+                                    relief=tk.FLAT, borderwidth=0,
+                                    insertbackground=self.colors['accent'])
+        self.tech_address.grid(row=0, column=0, pady=8, padx=15, sticky=(tk.W, tk.E))
+        
+        # Site Addresses Section
+        site_container = self.create_glass_frame(main_frame, "📋 Site Addresses")
+        site_container.container.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 15))
+        
+        instruction_text = "💡 Paste addresses in any format: Excel columns, comma-separated, or line-by-line"
+        instruction_label = tk.Label(site_container, text=instruction_text, 
+                                    font=('Segoe UI', 9),
+                                    bg='white', fg=self.colors['accent'])
+        instruction_label.grid(row=0, column=0, sticky=tk.W, pady=(8, 8), padx=15)
+        
+        # Input table container
+        input_container = tk.Frame(site_container, bg='white')
+        input_container.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=15, pady=(0, 10))
+        input_container.columnconfigure(0, weight=1)
+        input_container.rowconfigure(0, weight=1)
+        
+        # Create input table
+        input_columns = ('Status', 'Address', 'Suburb', 'State')
         self.input_tree = ttk.Treeview(input_container, columns=input_columns, 
                                        show='headings', height=6, style="Modern.Treeview")
         
-        # Define headings and columns
         self.input_tree.heading('Status', text='Status')
         self.input_tree.heading('Address', text='Address')
         self.input_tree.heading('Suburb', text='Suburb')
@@ -125,7 +174,6 @@ class AddressDistanceCalculator:
         self.input_tree.column('Suburb', width=180)
         self.input_tree.column('State', width=120)
         
-        # Configure tags with modern colors
         self.input_tree.tag_configure('normal', background='white')
         self.input_tree.tag_configure('pending', background='#f3f4f6')
         self.input_tree.tag_configure('cached', background='#dbeafe', foreground='#1e40af')
@@ -134,17 +182,16 @@ class AddressDistanceCalculator:
         
         self.input_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
-        # Scrollbar for input table with modern styling
         input_scrollbar = ttk.Scrollbar(input_container, orient=tk.VERTICAL, 
                                        command=self.input_tree.yview)
         input_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
         self.input_tree.configure(yscrollcommand=input_scrollbar.set)
         
-        # Paste area with modern styling and enhanced visibility
+        # Paste area
         paste_container = tk.Frame(
             site_container,
-            bg='#f3f4f6',  # subtle light gray for contrast
-            highlightbackground=self.colors['accent'],  # accent border
+            bg='#f3f4f6',
+            highlightbackground=self.colors['accent'],
             highlightthickness=2,
             bd=0,
             relief=tk.FLAT
@@ -166,7 +213,7 @@ class AddressDistanceCalculator:
         self.paste_entry.bind('<Control-v>', self.handle_paste)
         self.paste_entry.bind('<Command-v>', self.handle_paste)
         
-        # Buttons with modern styling
+        # Buttons
         button_frame = tk.Frame(main_frame, bg='#1a1a2e')
         button_frame.grid(row=3, column=0, pady=(0, 15))
         
@@ -186,7 +233,11 @@ class AddressDistanceCalculator:
                                                    self.calculate_distances, 'primary')
         self.calc_btn.pack(side=tk.LEFT, padx=15)
         
-        # Legend with modern styling
+        self.copy_btn = self.create_modern_button(button_frame, "📄 Copy Selected Columns", 
+                                                   self.copy_selected_columns_data, 'secondary')
+        self.copy_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Legend
         legend_frame = tk.Frame(main_frame, bg='#1a1a2e')
         legend_frame.grid(row=4, column=0, pady=(0, 15))
         
@@ -195,32 +246,67 @@ class AddressDistanceCalculator:
                                bg='#1a1a2e', fg='white')
         legend_title.pack(side=tk.LEFT, padx=5)
         
-        # Color indicators with glass effect
         self.create_legend_item(legend_frame, " ✓ Success ", '#d1fae5', '#065f46')
         self.create_legend_item(legend_frame, " 💾 Cached ", '#dbeafe', '#1e40af')
         self.create_legend_item(legend_frame, " ⚠ Broad Match ", '#fef3c7', '#92400e')
         self.create_legend_item(legend_frame, " ✗ Not Found ", '#fee2e2', '#991b1b')
         
-        # Results Table with glass effect
+        # Results Table with Filters
         results_container = self.create_glass_frame(main_frame, "📊 Results (Ranked by Distance)")
         results_container.container.grid(row=5, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 15))
         results_container.columnconfigure(0, weight=1)
-        results_container.columnconfigure(1, minsize=20)
         
-        # Create Results Treeview with modern styling
+        # Filter controls
+        filter_frame = tk.Frame(results_container, bg='white')
+        filter_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=15, pady=(8, 8))
+        
+        filter_label = tk.Label(filter_frame, text="🔍 Show:", 
+                               font=('Segoe UI', 9, 'bold'),
+                               bg='white', fg=self.colors['text_primary'])
+        filter_label.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Filter checkboxes
+        ttk.Checkbutton(filter_frame, text="✓ Found", 
+                       variable=self.filter_vars['success'],
+                       command=self.apply_filters,
+                       style="Modern.TCheckbutton").pack(side=tk.LEFT, padx=5)
+        
+        ttk.Checkbutton(filter_frame, text="💾 Cached", 
+                       variable=self.filter_vars['cached'],
+                       command=self.apply_filters,
+                       style="Modern.TCheckbutton").pack(side=tk.LEFT, padx=5)
+        
+        ttk.Checkbutton(filter_frame, text="⚠ Broad Match", 
+                       variable=self.filter_vars['broad'],
+                       command=self.apply_filters,
+                       style="Modern.TCheckbutton").pack(side=tk.LEFT, padx=5)
+        
+        ttk.Checkbutton(filter_frame, text="✗ Not Found", 
+                       variable=self.filter_vars['not_found'],
+                       command=self.apply_filters,
+                       style="Modern.TCheckbutton").pack(side=tk.LEFT, padx=5)
+        
+        # Column selection hint
+        hint_label = tk.Label(filter_frame, text="💡 Drag to select cells, Ctrl+C to copy • Click headers for column copy", 
+                             font=('Segoe UI', 8, 'italic'),
+                             bg='white', fg=self.colors['text_secondary'])
+        hint_label.pack(side=tk.RIGHT, padx=10)
+        
+        # Results treeview
+        results_tree_container = tk.Frame(results_container, bg='white')
+        results_tree_container.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=15, pady=(0, 10))
+        results_tree_container.columnconfigure(0, weight=1)
+        results_tree_container.rowconfigure(0, weight=1)
+        
         result_columns = ('Rank', 'Address', 'Suburb', 'State', 'Distance (km)', 
                          'Duration (min)', 'Status')
-        self.results_tree = ttk.Treeview(results_container, columns=result_columns, 
+        self.results_tree = ttk.Treeview(results_tree_container, columns=result_columns, 
                                         show='headings', height=8, style="Modern.Treeview")
         
-        # Define headings
-        self.results_tree.heading('Rank', text='#')
-        self.results_tree.heading('Address', text='Address')
-        self.results_tree.heading('Suburb', text='Suburb')
-        self.results_tree.heading('State', text='State')
-        self.results_tree.heading('Distance (km)', text='Distance (km)')
-        self.results_tree.heading('Duration (min)', text='Duration (min)')
-        self.results_tree.heading('Status', text='Status')
+        # Bind column header clicks for selection
+        for col in result_columns:
+            self.results_tree.heading(col, text=col, 
+                                     command=lambda c=col: self.toggle_column_selection(c))
         
         self.results_tree.column('Rank', width=50, anchor='center')
         self.results_tree.column('Address', width=350)
@@ -230,21 +316,28 @@ class AddressDistanceCalculator:
         self.results_tree.column('Duration (min)', width=120, anchor='center')
         self.results_tree.column('Status', width=150, anchor='center')
         
-        # Configure result tags with modern colors
         self.results_tree.tag_configure('success', background='#d1fae5', foreground='#065f46')
         self.results_tree.tag_configure('cached', background='#dbeafe', foreground='#1e40af')
         self.results_tree.tag_configure('warning', background='#fef3c7', foreground='#92400e')
         self.results_tree.tag_configure('error', background='#fee2e2', foreground='#991b1b')
         
-        self.results_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=15, pady=10)
+        self.results_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
-        # Scrollbar for results
-        results_scrollbar = ttk.Scrollbar(results_container, orient=tk.VERTICAL, 
+        # Enable Excel-like cell selection
+        self.results_tree.bind('<Button-1>', self.on_cell_click)
+        self.results_tree.bind('<B1-Motion>', self.on_cell_drag)
+        self.results_tree.bind('<ButtonRelease-1>', self.on_cell_release)
+        
+        # Enable copying from results tree
+        self.results_tree.bind('<Control-c>', self.copy_selected_cells)
+        self.results_tree.bind('<Command-c>', self.copy_selected_cells)
+        
+        results_scrollbar = ttk.Scrollbar(results_tree_container, orient=tk.VERTICAL, 
                                          command=self.results_tree.yview)
-        results_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S), pady=10)
+        results_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
         self.results_tree.configure(yscrollcommand=results_scrollbar.set)
         
-        # Status bar with modern styling
+        # Status bar
         status_frame = tk.Frame(main_frame, bg='#1a1a2e')
         status_frame.grid(row=6, column=0, sticky=(tk.W, tk.E))
         status_frame.columnconfigure(0, weight=1)
@@ -258,35 +351,23 @@ class AddressDistanceCalculator:
                              padx=15, pady=8)
         status_bar.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 8))
         
-        # Progress bar with modern styling
-        style.configure("Modern.Horizontal.TProgressbar",
-                       troughcolor='#2d3748',
-                       background=self.colors['accent'],
-                       borderwidth=0,
-                       thickness=6)
-        
         self.progress = ttk.Progressbar(status_frame, mode='determinate', 
                                        style="Modern.Horizontal.TProgressbar")
         self.progress.grid(row=1, column=0, sticky=(tk.W, tk.E))
-        self.progress.grid_remove()  # Hide initially
+        self.progress.grid_remove()
         
-        # Configure row weights for resizing
+        # Configure row weights
         main_frame.rowconfigure(2, weight=1)
         main_frame.rowconfigure(5, weight=2)
-    
-    def setup_modern_styles(self):
-        """Setup modern visual styles"""
-        pass  # Styles are now configured inline
+        results_container.rowconfigure(1, weight=1)
     
     def create_glass_frame(self, parent, title):
         """Create a frame with glass morphism effect"""
-        # Main container
         container = tk.Frame(parent, bg='#1a1a2e')
         container.configure(highlightbackground='#e5e7eb', highlightthickness=1)
         container.columnconfigure(0, weight=1)
         container.rowconfigure(1, weight=1)
         
-        # Title bar
         title_bar = tk.Frame(container, bg='white', height=35)
         title_bar.grid(row=0, column=0, sticky=(tk.W, tk.E))
         title_bar.grid_propagate(False)
@@ -297,13 +378,10 @@ class AddressDistanceCalculator:
                               anchor=tk.W, padx=15)
         title_label.pack(side=tk.LEFT, fill=tk.X, expand=True, pady=8)
         
-        # Content frame with white background (THIS is what we return and use)
         content = tk.Frame(container, bg='white', relief=tk.FLAT, borderwidth=0)
         content.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         content.columnconfigure(0, weight=1)
-        content.rowconfigure(1, weight=1)  # Row 1 for expandable content
-        
-        # Store reference to container in the content frame
+        content.rowconfigure(1, weight=1)
         content.container = container
         
         return content
@@ -330,21 +408,323 @@ class AddressDistanceCalculator:
                           padx=20, pady=10,
                           cursor='hand2')
         
-        # Hover effects
         button.bind('<Enter>', lambda e: button.config(bg=hover_bg))
         button.bind('<Leave>', lambda e: button.config(bg=bg_color))
         
         return button
     
     def create_legend_item(self, parent, text, bg, fg):
-        """Create a legend item with modern styling"""
+        """Create a legend item"""
         label = tk.Label(parent, text=text, bg=bg, fg=fg,
                         font=('Segoe UI', 8, 'bold'),
                         padx=8, pady=4)
         label.pack(side=tk.LEFT, padx=3)
     
+    def on_cell_click(self, event):
+        """Handle cell click for Excel-like selection"""
+        region = self.results_tree.identify_region(event.x, event.y)
+        
+        if region == "cell":
+            item = self.results_tree.identify_row(event.y)
+            column = self.results_tree.identify_column(event.x)
+            
+            if item and column:
+                # Clear previous selection
+                self.clear_cell_highlights()
+                
+                # Start new selection
+                self.cell_selection['active'] = True
+                self.cell_selection['start_item'] = item
+                self.cell_selection['start_col'] = column
+                self.cell_selection['end_item'] = item
+                self.cell_selection['end_col'] = column
+                self.cell_selection['selected_cells'] = {(item, column)}
+                
+                # Highlight selected cell
+                self.highlight_selected_cells()
+    
+    def on_cell_drag(self, event):
+        """Handle cell drag for selecting multiple cells"""
+        if not self.cell_selection['active']:
+            return
+        
+        region = self.results_tree.identify_region(event.x, event.y)
+        
+        if region == "cell":
+            item = self.results_tree.identify_row(event.y)
+            column = self.results_tree.identify_column(event.x)
+            
+            if item and column:
+                self.cell_selection['end_item'] = item
+                self.cell_selection['end_col'] = column
+                
+                # Update selected cells
+                self.update_cell_selection()
+                self.highlight_selected_cells()
+    
+    def on_cell_release(self, event):
+        """Handle mouse release to finalize selection"""
+        if self.cell_selection['active']:
+            self.cell_selection['active'] = False
+    
+    def update_cell_selection(self):
+        """Update the set of selected cells based on start and end"""
+        self.cell_selection['selected_cells'] = set()
+        
+        # Get all items and columns
+        all_items = self.results_tree.get_children()
+        all_columns = self.results_tree['columns']
+        
+        # Find indices
+        start_item = self.cell_selection['start_item']
+        end_item = self.cell_selection['end_item']
+        start_col = self.cell_selection['start_col']
+        end_col = self.cell_selection['end_col']
+        
+        if start_item not in all_items or end_item not in all_items:
+            return
+        
+        start_row_idx = all_items.index(start_item)
+        end_row_idx = all_items.index(end_item)
+        
+        # Normalize column identifiers (they're like '#1', '#2', etc.)
+        start_col_idx = int(start_col.replace('#', '')) - 1
+        end_col_idx = int(end_col.replace('#', '')) - 1
+        
+        # Ensure start is before end
+        min_row = min(start_row_idx, end_row_idx)
+        max_row = max(start_row_idx, end_row_idx)
+        min_col = min(start_col_idx, end_col_idx)
+        max_col = max(start_col_idx, end_col_idx)
+        
+        # Select all cells in the range
+        for row_idx in range(min_row, max_row + 1):
+            for col_idx in range(min_col, max_col + 1):
+                item = all_items[row_idx]
+                col = f'#{col_idx + 1}'
+                self.cell_selection['selected_cells'].add((item, col))
+    
+    def highlight_selected_cells(self):
+        """Highlight selected cells (visual feedback)"""
+        # Clear previous highlights
+        self.clear_cell_highlights()
+        
+        # We can't directly highlight individual cells in ttk.Treeview,
+        # but we can select rows
+        selected_items = {item for item, col in self.cell_selection['selected_cells']}
+        self.results_tree.selection_set(list(selected_items))
+    
+    def clear_cell_highlights(self):
+        """Clear cell highlights"""
+        self.results_tree.selection_remove(self.results_tree.selection())
+    
+    def copy_selected_cells(self, event=None):
+        """Copy selected cells in Excel format"""
+        if not self.cell_selection['selected_cells']:
+            # Fallback to copying selected rows
+            return self.copy_selected_rows(event)
+        
+        # Get all items and columns
+        all_items = self.results_tree.get_children()
+        all_columns = self.results_tree['columns']
+        
+        # Organize selected cells by row and column
+        cells_by_row = {}
+        for item, col in self.cell_selection['selected_cells']:
+            if item not in all_items:
+                continue
+            
+            row_idx = all_items.index(item)
+            col_idx = int(col.replace('#', '')) - 1
+            
+            if row_idx not in cells_by_row:
+                cells_by_row[row_idx] = {}
+            
+            values = self.results_tree.item(item, 'values')
+            if col_idx < len(values):
+                cells_by_row[row_idx][col_idx] = str(values[col_idx])
+        
+        # Build text output
+        lines = []
+        for row_idx in sorted(cells_by_row.keys()):
+            cols = cells_by_row[row_idx]
+            # Get column range
+            if cols:
+                min_col = min(cols.keys())
+                max_col = max(cols.keys())
+                
+                # Build row with all columns in range (empty if not selected)
+                row_values = []
+                for col_idx in range(min_col, max_col + 1):
+                    row_values.append(cols.get(col_idx, ''))
+                
+                lines.append('\t'.join(row_values))
+        
+        if lines:
+            text = '\n'.join(lines)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            
+            num_cells = len(self.cell_selection['selected_cells'])
+            num_rows = len(cells_by_row)
+            num_cols = max(len(cells) for cells in cells_by_row.values()) if cells_by_row else 0
+            
+            self.status_var.set(f"✓ Copied {num_rows} row(s) × {num_cols} column(s) ({num_cells} cells)")
+    
+    def copy_selected_rows(self, event=None):
+        """Copy selected rows with all columns"""
+        selected_items = self.results_tree.selection()
+        if not selected_items:
+            return
+        
+        lines = []
+        for item in selected_items:
+            values = self.results_tree.item(item, 'values')
+            lines.append('\t'.join(str(v) for v in values))
+        
+        text = '\n'.join(lines)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        
+        self.status_var.set(f"✓ Copied {len(selected_items)} row(s) to clipboard")
+    
+    def toggle_column_selection(self, column):
+        """Toggle column selection for copying"""
+        if column in self.selected_columns:
+            self.selected_columns.remove(column)
+            # Reset to normal style
+            self.results_tree.heading(column, text=column)
+        else:
+            self.selected_columns.add(column)
+            # Highlight selected column
+            self.results_tree.heading(column, text=f"✓ {column}")
+        
+        # Update status
+        if self.selected_columns:
+            cols = ', '.join(self.selected_columns)
+            self.status_var.set(f"📋 Selected columns: {cols}")
+        else:
+            self.status_var.set("💡 Click column headers to select for copying")
+    
+    def copy_selected_columns_data(self):
+        """Copy only selected columns from all visible results"""
+        if not self.selected_columns:
+            messagebox.showinfo("No Columns Selected", 
+                              "Please click on column headers to select which columns to copy.")
+            return
+        
+        if not self.results_tree.get_children():
+            messagebox.showinfo("No Results", "No results to copy")
+            return
+        
+        # Get all columns
+        all_columns = self.results_tree['columns']
+        selected_indices = [all_columns.index(col) for col in self.selected_columns]
+        selected_indices.sort()
+        
+        # Build header
+        headers = [all_columns[i] for i in selected_indices]
+        lines = ['\t'.join(headers)]
+        
+        # Add data rows
+        for item in self.results_tree.get_children():
+            values = self.results_tree.item(item, 'values')
+            selected_values = [str(values[i]) for i in selected_indices]
+            lines.append('\t'.join(selected_values))
+        
+        text = '\n'.join(lines)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        
+        col_names = ', '.join(headers)
+        messagebox.showinfo("Copied", 
+                          f"Copied {len(lines)-1} rows with columns:\n{col_names}\n\nYou can paste directly into Excel or other spreadsheets.")
+        self.status_var.set(f"✓ Copied {len(self.selected_columns)} columns × {len(lines)-1} rows")
+    
+    def copy_selected_rows(self, event=None):
+        """Copy selected rows with all columns"""
+        selected_items = self.results_tree.selection()
+        if not selected_items:
+            return
+        
+        lines = []
+        for item in selected_items:
+            values = self.results_tree.item(item, 'values')
+            lines.append('\t'.join(str(v) for v in values))
+        
+        text = '\n'.join(lines)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        
+        self.status_var.set(f"✓ Copied {len(selected_items)} row(s) to clipboard")
+    
+    def apply_filters(self):
+        """Apply filters to results display"""
+        if not self.all_results:
+            return
+        
+        # Clear current display
+        for item in self.results_tree.get_children():
+            self.results_tree.delete(item)
+        
+        # Filter results based on checkboxes
+        filtered_results = []
+        for result in self.all_results:
+            tag = result['tag']
+            
+            if tag == 'success' and self.filter_vars['success'].get():
+                filtered_results.append(result)
+            elif tag == 'cached' and self.filter_vars['cached'].get():
+                filtered_results.append(result)
+            elif tag == 'warning' and self.filter_vars['broad'].get():
+                filtered_results.append(result)
+            elif tag == 'error' and self.filter_vars['not_found'].get():
+                filtered_results.append(result)
+        
+        # Display filtered results
+        for rank, result in enumerate(filtered_results, 1):
+            if result['distance'] == float('inf'):
+                self.results_tree.insert('', tk.END, values=(
+                    rank,
+                    result['address'],
+                    result['suburb'],
+                    result['state'],
+                    'N/A',
+                    'N/A',
+                    result['status']
+                ), tags=(result['tag'],))
+            else:
+                tag = result['tag']
+                if tag == 'cached':
+                    display_tag = 'cached'
+                elif tag == 'normal' or tag == 'success':
+                    display_tag = 'success'
+                else:
+                    display_tag = 'warning'
+                
+                self.results_tree.insert('', tk.END, values=(
+                    rank,
+                    result['address'],
+                    result['suburb'],
+                    result['state'],
+                    f"{result['distance']:.2f}",
+                    f"{result['duration']:.0f}",
+                    result['status']
+                ), tags=(display_tag,))
+        
+        # Clear cell selection when filters change
+        self.cell_selection['selected_cells'] = set()
+        
+        # Update status
+        total = len(self.all_results)
+        showing = len(filtered_results)
+        if showing < total:
+            self.status_var.set(f"🔍 Showing {showing} of {total} results (filtered)")
+        else:
+            self.status_var.set(f"📊 Showing all {total} results")
+    
     def handle_paste(self, event=None):
-        """Handle paste event to auto-process after a short delay"""
+        """Handle paste event"""
         self.root.after(100, self.auto_process_hint)
         return None
     
@@ -354,9 +734,8 @@ class AddressDistanceCalculator:
         if pasted_text:
             self.status_var.set("📋 Data pasted! Click 'Add Addresses' to process")
     
-    
     def parse_address_line(self, line):
-        """Parse a single line of address data in various formats"""
+        """Parse a single line of address data"""
         line = line.strip()
         if not line:
             return None
@@ -371,14 +750,12 @@ class AddressDistanceCalculator:
         if ',' in line:
             parts = [p.strip() for p in line.split(',') if p.strip()]
             if len(parts) >= 3:
-                # Last part is likely state, second-to-last is suburb
                 return {
                     'address': ', '.join(parts[:-2]),
                     'suburb': parts[-2],
                     'state': parts[-1]
                 }
             elif len(parts) == 2:
-                # Suburb, State format (address missing)
                 return {'address': '', 'suburb': parts[0], 'state': parts[1]}
         
         # Try pipe-separated
@@ -387,11 +764,9 @@ class AddressDistanceCalculator:
             if len(parts) >= 3:
                 return {'address': parts[0], 'suburb': parts[1], 'state': parts[2]}
         
-        # Single line - try to detect if it's a full address
-        # Pattern: street, suburb, state postcode
+        # Single line - try to detect full address
         parts = [p.strip() for p in line.split(',')]
         if len(parts) >= 2:
-            # Check if last part looks like "STATE POSTCODE" or just "STATE"
             last_part = parts[-1].strip()
             state_match = re.match(r'^([A-Z]{2,3})(\s+\d{4})?$', last_part)
             if state_match:
@@ -403,14 +778,13 @@ class AddressDistanceCalculator:
         return None
     
     def process_pasted_data(self):
-        """Process pasted data from multiple formats"""
+        """Process pasted data"""
         pasted_text = self.paste_entry.get("1.0", tk.END).strip()
         
         if not pasted_text:
             messagebox.showinfo("No Data", "Please paste address data first")
             return
         
-        # Split by newlines
         lines = pasted_text.split('\n')
         added_count = 0
         skipped_count = 0
@@ -423,7 +797,6 @@ class AddressDistanceCalculator:
                 suburb = parsed['suburb']
                 state = parsed['state']
                 
-                # Check for duplicates
                 is_duplicate = any(
                     addr['address'] == address and 
                     addr['suburb'] == suburb and 
@@ -432,19 +805,16 @@ class AddressDistanceCalculator:
                 )
                 
                 if not is_duplicate:
-                    # Check if we have cached geocoding data
                     cache_key = f"{address}, {suburb}, {state}".lower()
                     is_cached = cache_key in self.geocode_cache
                     
                     status = '💾 Cached' if is_cached else 'Pending'
                     tag = 'cached' if is_cached else 'pending'
                     
-                    # Add to tree
                     self.input_tree.insert('', tk.END, 
                                          values=(status, address, suburb, state),
                                          tags=(tag,))
                     
-                    # Add to list
                     site_data = {
                         'address': address,
                         'suburb': suburb,
@@ -452,7 +822,6 @@ class AddressDistanceCalculator:
                         'status': 'pending'
                     }
                     
-                    # If cached, add the cached data
                     if is_cached:
                         cached_data = self.geocode_cache[cache_key]
                         site_data.update(cached_data)
@@ -463,7 +832,6 @@ class AddressDistanceCalculator:
                 else:
                     skipped_count += 1
         
-        # Clear paste area
         self.paste_entry.delete("1.0", tk.END)
         
         if added_count > 0:
@@ -488,7 +856,7 @@ class AddressDistanceCalculator:
                 self.status_var.set("⚠ No valid addresses found")
     
     def remove_selected(self):
-        """Remove selected address from the list"""
+        """Remove selected addresses"""
         selected_items = self.input_tree.selection()
         if not selected_items:
             messagebox.showinfo("No Selection", "Please select an address to remove")
@@ -497,12 +865,10 @@ class AddressDistanceCalculator:
         removed_count = 0
         for item in selected_items:
             values = self.input_tree.item(item, 'values')
-            # Remove from list
             self.site_addresses = [addr for addr in self.site_addresses 
                                    if not (addr['address'] == values[1] and 
                                           addr['suburb'] == values[2] and 
                                           addr['state'] == values[3])]
-            # Remove from tree
             self.input_tree.delete(item)
             removed_count += 1
         
@@ -520,51 +886,379 @@ class AddressDistanceCalculator:
         else:
             self.status_var.set("ℹ No addresses to clear")
     
-    def geocode_address(self, address, retry_broader=False):
-        """Geocode an address using Nominatim API with retry logic"""
+    def geocode_address_incremental(self, address, max_retries=4):
+        """
+        Geocode address with incremental broader search strategy
+        
+        Strategy:
+        1. Try exact address (e.g., "Shop 6, 5 Halley Street, Chisholm, ACT")
+        2. Remove shop/unit (e.g., "5 Halley Street, Chisholm, ACT")
+        3. Try suburb + state only (e.g., "Chisholm, ACT")
+        4. Try major landmarks if applicable (e.g., "Shopping Centre Name, Suburb, State")
+        5. Try state only as last resort (e.g., "ACT, Australia")
+        """
         base_url = "https://nominatim.openstreetmap.org/search"
+        headers = {'User-Agent': 'AddressDistanceCalculator/3.0'}
         
-        # If retry, make the search broader by removing specific details
-        search_address = address
-        if retry_broader:
-            # Remove street numbers and unit details for broader search
-            parts = address.split(',')
-            if len(parts) >= 2:
-                # Keep suburb and state, remove specific address
-                search_address = ', '.join(parts[1:])
+        parts = [p.strip() for p in address.split(',')]
         
-        params = {
-            'q': search_address,
-            'format': 'json',
-            'limit': 1,
-            'countrycodes': 'au'  # Focus on Australia for better results
-        }
-        headers = {
-            'User-Agent': 'AddressDistanceCalculator/2.0'
-        }
+        # Build search attempts from most specific to broader
+        search_attempts = []
         
+        # Attempt 1: Full address
+        search_attempts.append({
+            'query': address,
+            'level': 0,
+            'description': 'exact address'
+        })
+        
+        # Attempt 2: Remove shop/unit numbers and descriptors
+        if len(parts) >= 3:
+            street_part = parts[0]
+            # Remove common prefixes
+            cleaned_street = re.sub(r'^(Shop|Unit|Suite|Level|T/a|Tenancy|Lot)\s*\d+[A-Za-z]?,?\s*', '', 
+                                   street_part, flags=re.IGNORECASE)
+            cleaned_street = re.sub(r'^(Shops?|Units?)\s+\d+\s*[&-]\s*\d+,?\s*', '', 
+                                   cleaned_street, flags=re.IGNORECASE)
+            
+            if cleaned_street != street_part and cleaned_street.strip():
+                search_attempts.append({
+                    'query': ', '.join([cleaned_street] + parts[1:]),
+                    'level': 1,
+                    'description': 'without shop/unit number'
+                })
+        
+        # Attempt 3: Extract shopping centre name if present
+        shopping_centre_match = re.search(r'([\w\s]+(?:Shopping Centre|Market|Plaza|Fair|Marketplace))', 
+                                         address, re.IGNORECASE)
+        if shopping_centre_match and len(parts) >= 2:
+            centre_name = shopping_centre_match.group(1).strip()
+            search_attempts.append({
+                'query': f"{centre_name}, {parts[-2]}, {parts[-1]}",
+                'level': 1,
+                'description': 'shopping centre with suburb'
+            })
+        
+        # Attempt 4: Street name + suburb + state (remove building number)
+        if len(parts) >= 3:
+            street_name = re.sub(r'^\d+[A-Za-z]?\s*', '', parts[0])  # Remove leading number
+            street_name = re.sub(r'^(Shop|Unit|Suite|Level|T/a|Tenancy)\s*.*?,?\s*', '', 
+                                street_name, flags=re.IGNORECASE)
+            if street_name.strip() and len(street_name.strip()) > 3:
+                search_attempts.append({
+                    'query': ', '.join([street_name.strip()] + parts[1:]),
+                    'level': 2,
+                    'description': 'street name with suburb'
+                })
+        
+        # Attempt 5: Suburb + State only (most common fallback)
+        if len(parts) >= 2:
+            search_attempts.append({
+                'query': f"{parts[-2]}, {parts[-1]}",
+                'level': 3,
+                'description': 'suburb and state'
+            })
+        
+        # Attempt 6: State + Australia (last resort)
+        if len(parts) >= 1:
+            search_attempts.append({
+                'query': f"{parts[-1]}, Australia",
+                'level': 4,
+                'description': 'state only'
+            })
+        
+        # Try each search attempt
+        for attempt_num, attempt in enumerate(search_attempts[:max_retries], 1):
+            if attempt_num > 1:
+                time.sleep(0.5)  # Small delay between retries
+            
+            params = {
+                'q': attempt['query'],
+                'format': 'json',
+                'limit': 3,  # Get top 3 results for better matching
+                'countrycodes': 'au',
+                'addressdetails': 1
+            }
+            
+            try:
+                response = requests.get(base_url, params=params, headers=headers, timeout=10)
+                response.raise_for_status()
+                data = response.json()
+                
+                if data:
+                    # For suburb-level searches, try to match the actual suburb
+                    if attempt['level'] >= 2 and len(parts) >= 2:
+                        suburb_to_match = parts[-2].lower().strip()
+                        
+                        # Look for best match in results
+                        for result in data:
+                            result_address = result.get('address', {})
+                            result_suburb = (result_address.get('suburb') or 
+                                           result_address.get('city') or 
+                                           result_address.get('town') or '').lower()
+                            
+                            if suburb_to_match in result_suburb or result_suburb in suburb_to_match:
+                                return (float(result['lat']), 
+                                       float(result['lon']), 
+                                       attempt['level'],
+                                       attempt['description'])
+                    
+                    # Return first result if no specific match found
+                    return (float(data[0]['lat']), 
+                           float(data[0]['lon']), 
+                           attempt['level'],
+                           attempt['description'])
+                
+            except Exception as e:
+                print(f"Attempt {attempt_num} failed for '{attempt['query']}': {e}")
+                continue
+        
+        # All attempts failed
+        return None, None, None, None
+    
+    def get_osrm_route(self, coord1, coord2):
+        """Get actual route distance and duration using OSRM"""
         try:
-            response = requests.get(base_url, params=params, headers=headers)
+            lon1, lat1 = coord1[1], coord1[0]
+            lon2, lat2 = coord2[1], coord2[0]
+            
+            url = f"http://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}"
+            params = {
+                'overview': 'false',
+                'steps': 'false'
+            }
+            
+            response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
             
-            if data:
-                return float(data[0]['lat']), float(data[0]['lon']), retry_broader
-            return None, None, retry_broader
+            if data['code'] == 'Ok' and data['routes']:
+                route = data['routes'][0]
+                distance_km = route['distance'] / 1000
+                duration_min = route['duration'] / 60
+                return distance_km, duration_min
+            else:
+                distance_km = geodesic(coord1, coord2).kilometers
+                duration_min = (distance_km / 50) * 60
+                return distance_km, duration_min
         except Exception as e:
-            print(f"Error geocoding address: {e}")
-            return None, None, retry_broader
+            print(f"OSRM error: {e}")
+            distance_km = geodesic(coord1, coord2).kilometers
+            duration_min = (distance_km / 50) * 60
+            return distance_km, duration_min
     
     def update_input_tree_status(self, address, suburb, state, status, tag):
-        """Update the status in the input tree"""
+        """Update status in input tree"""
         for item in self.input_tree.get_children():
             values = self.input_tree.item(item, 'values')
             if values[1] == address and values[2] == suburb and values[3] == state:
                 self.input_tree.item(item, values=(status, address, suburb, state), tags=(tag,))
                 break
     
+    def calculate_distances_worker(self, tech_addr):
+        """Worker function for calculating distances in a separate thread"""
+        try:
+            self.result_queue.put(('status', "🔍 Geocoding technician address..."))
+            tech_lat, tech_lon, tech_level, tech_desc = self.geocode_address_incremental(tech_addr)
+            
+            if not tech_lat:
+                self.result_queue.put(('error', "Could not geocode technician address"))
+                return
+            
+            tech_coords = (tech_lat, tech_lon)
+            self.result_queue.put(('progress', 1))
+            time.sleep(0.5)
+            
+            results = []
+            total = len(self.site_addresses)
+            
+            for i, site in enumerate(self.site_addresses):
+                if self.stop_calculation:
+                    self.result_queue.put(('status', "❌ Calculation cancelled"))
+                    return
+                
+                progress_percent = int(((i + 1) / total) * 100)
+                full_address = f"{site['address']}, {site['suburb']}, {site['state']}"
+                cache_key = full_address.lower()
+                
+                if 'lat' in site and 'lon' in site and site['lat'] and site['lon']:
+                    site_lat = site['lat']
+                    site_lon = site['lon']
+                    match_level = site.get('match_level', 0)
+                    match_desc = site.get('match_desc', 'exact')
+                    
+                    self.result_queue.put(('status', f"💾 Using cached data ({progress_percent}%): {site['suburb']}"))
+                    
+                    site_coords = (site_lat, site_lon)
+                    distance_km, duration_min = self.get_osrm_route(tech_coords, site_coords)
+                    
+                    # Determine status based on match level
+                    if match_level == 0:
+                        status = "💾 Cached"
+                        tag = 'cached'
+                    else:
+                        status = f"💾 Cached ({match_desc})"
+                        tag = 'cached'
+                    
+                    result = {
+                        'address': site['address'],
+                        'suburb': site['suburb'],
+                        'state': site['state'],
+                        'distance': distance_km,
+                        'duration': duration_min,
+                        'status': status,
+                        'tag': tag,
+                        'match_level': match_level
+                    }
+                    results.append(result)
+                    self.result_queue.put(('update_input', (site['address'], site['suburb'], site['state'], status, tag)))
+                    self.result_queue.put(('progress', i + 2))
+                    continue
+                
+                self.result_queue.put(('status', f"⏳ Geocoding ({progress_percent}%): {site['suburb']}"))
+                
+                site_lat, site_lon, match_level, match_desc = self.geocode_address_incremental(full_address)
+                
+                if site_lat and site_lon:
+                    site_coords = (site_lat, site_lon)
+                    distance_km, duration_min = self.get_osrm_route(tech_coords, site_coords)
+                    
+                    self.geocode_cache[cache_key] = {
+                        'lat': site_lat,
+                        'lon': site_lon,
+                        'match_level': match_level,
+                        'match_desc': match_desc
+                    }
+                    
+                    site['lat'] = site_lat
+                    site['lon'] = site_lon
+                    site['match_level'] = match_level
+                    site['match_desc'] = match_desc
+                    site['status'] = 'geocoded'
+                    
+                    # Determine status based on match quality
+                    if match_level == 0:
+                        status = "✓ Found (exact)"
+                        tag = 'success'
+                    elif match_level == 1:
+                        status = f"✓ Found ({match_desc})"
+                        tag = 'success'
+                    elif match_level == 2:
+                        status = f"⚠ Approximate ({match_desc})"
+                        tag = 'warning'
+                    else:
+                        status = f"⚠ Broad ({match_desc})"
+                        tag = 'warning'
+                    
+                    result = {
+                        'address': site['address'],
+                        'suburb': site['suburb'],
+                        'state': site['state'],
+                        'distance': distance_km,
+                        'duration': duration_min,
+                        'status': status,
+                        'tag': tag,
+                        'match_level': match_level
+                    }
+                    results.append(result)
+                    self.result_queue.put(('update_input', (site['address'], site['suburb'], site['state'], status, tag)))
+                else:
+                    result = {
+                        'address': site['address'],
+                        'suburb': site['suburb'],
+                        'state': site['state'],
+                        'distance': float('inf'),
+                        'duration': float('inf'),
+                        'status': '✗ Not Found',
+                        'tag': 'error',
+                        'match_level': 999
+                    }
+                    results.append(result)
+                    self.result_queue.put(('update_input', (site['address'], site['suburb'], site['state'], '✗ Not Found', 'error')))
+                
+                self.result_queue.put(('progress', i + 2))
+                time.sleep(0.5)
+            
+            results.sort(key=lambda x: x['distance'])
+            self.result_queue.put(('results', results))
+            self.result_queue.put(('complete', None))
+            
+        except Exception as e:
+            self.result_queue.put(('error', f"Calculation error: {str(e)}"))
+    
+    def process_queue(self):
+        """Process messages from the worker thread"""
+        try:
+            while not self.result_queue.empty():
+                msg_type, data = self.result_queue.get_nowait()
+                
+                if msg_type == 'status':
+                    self.status_var.set(data)
+                elif msg_type == 'progress':
+                    self.progress['value'] = data
+                elif msg_type == 'update_input':
+                    self.update_input_tree_status(*data)
+                elif msg_type == 'results':
+                    self.all_results = data
+                    self.apply_filters()
+                elif msg_type == 'complete':
+                    self.calculation_complete()
+                elif msg_type == 'error':
+                    self.handle_calculation_error(data)
+        except:
+            pass
+        
+        self.root.after(100, self.process_queue)
+    
+    def calculation_complete(self):
+        """Handle calculation completion"""
+        self.progress.grid_remove()
+        self.calc_btn.config(state=tk.NORMAL)
+        
+        # Count by category
+        counts = {
+            'success': sum(1 for r in self.all_results if r['tag'] == 'success'),
+            'cached': sum(1 for r in self.all_results if r['tag'] == 'cached'),
+            'retry': sum(1 for r in self.all_results if r['tag'] == 'warning'),
+            'error': sum(1 for r in self.all_results if r['tag'] == 'error')
+        }
+        
+        summary_parts = []
+        if counts['success'] > 0:
+            summary_parts.append(f"{counts['success']} found")
+        if counts['cached'] > 0:
+            summary_parts.append(f"{counts['cached']} cached")
+        if counts['retry'] > 0:
+            summary_parts.append(f"{counts['retry']} broad matches")
+        if counts['error'] > 0:
+            summary_parts.append(f"{counts['error']} not found")
+        
+        summary = f"✓ Complete! " + ", ".join(summary_parts)
+        self.status_var.set(summary)
+        
+        if counts['error'] > 0 or counts['cached'] > 0:
+            msg_parts = ["Calculation complete!\n"]
+            if counts['success'] > 0:
+                msg_parts.append(f"✓ Successfully geocoded: {counts['success']}")
+            if counts['cached'] > 0:
+                msg_parts.append(f"💾 Used cached data: {counts['cached']}")
+            if counts['retry'] > 0:
+                msg_parts.append(f"⚠ Broad matches: {counts['retry']}")
+            if counts['error'] > 0:
+                msg_parts.append(f"✗ Not found: {counts['error']}")
+            msg_parts.append("\nUse filters to show/hide specific result types.")
+            
+            messagebox.showinfo("Results Summary", "\n".join(msg_parts))
+    
+    def handle_calculation_error(self, error_msg):
+        """Handle calculation errors"""
+        self.progress.grid_remove()
+        self.calc_btn.config(state=tk.NORMAL)
+        messagebox.showerror("Calculation Error", error_msg)
+        self.status_var.set(f"✗ Error: {error_msg}")
+    
     def calculate_distances(self):
-        """Calculate distances from technician to all sites with smart retry and caching"""
+        """Start distance calculation in a separate thread"""
         tech_addr = self.tech_address.get("1.0", tk.END).strip()
         
         if not tech_addr:
@@ -575,232 +1269,27 @@ class AddressDistanceCalculator:
             messagebox.showwarning("Input Required", "Please add at least one site address")
             return
         
-        # Clear previous results
-        for item in self.results_tree.get_children():
-            self.results_tree.delete(item)
+        if self.calculation_thread and self.calculation_thread.is_alive():
+            messagebox.showwarning("Busy", "Calculation already in progress")
+            return
         
-        # Count addresses that need geocoding (those without lat/lon data)
         addresses_to_geocode = [s for s in self.site_addresses 
                                 if 'lat' not in s or 'lon' not in s or not s.get('lat') or not s.get('lon')]
-        cached_count = len(self.site_addresses) - len(addresses_to_geocode)
         
-        # Show and initialize progress bar
         self.progress.grid()
-        total_steps = len(addresses_to_geocode) + 1  # +1 for technician address
+        total_steps = len(addresses_to_geocode) + 1
         self.progress['maximum'] = total_steps
         self.progress['value'] = 0
         
-        self.status_var.set("🔍 Geocoding technician address...")
-        self.root.update()
+        self.calc_btn.config(state=tk.DISABLED)
         
-        # Geocode technician address
-        tech_lat, tech_lon, _ = self.geocode_address(tech_addr)
-        if not tech_lat:
-            self.progress.grid_remove()
-            messagebox.showerror("Geocoding Error", 
-                               "Could not find technician address.\n\n" +
-                               "Please check the address and try again.")
-            self.status_var.set("✗ Error: Could not geocode technician address")
-            return
-        
-        # Update progress for technician address
-        self.progress['value'] = 1
-        self.root.update()
-        
-        tech_coords = (tech_lat, tech_lon)
-        time.sleep(1)  # Respect API rate limit
-        
-        results = []
-        total = len(self.site_addresses)
-        processed = 0
-        
-        for i, site in enumerate(self.site_addresses):
-            # Update progress bar
-            current_step = i + 2 - cached_count if i >= cached_count else 1
-            if 'lat' not in site or 'lon' not in site:
-                self.progress['value'] = current_step
-            
-            progress_percent = int(((i + 1) / total) * 100)
-            
-            # Build full address
-            full_address = f"{site['address']}, {site['suburb']}, {site['state']}"
-            cache_key = full_address.lower()
-            
-            # Check if already cached (either from previous calculation or from cache)
-            if 'lat' in site and 'lon' in site and site['lat'] and site['lon']:
-                # Use cached coordinates
-                site_lat = site['lat']
-                site_lon = site['lon']
-                was_retried = site.get('was_retried', False)
-                
-                self.status_var.set(f"💾 Using cached data ({progress_percent}%): {site['suburb']}")
-                self.root.update()
-                
-                site_coords = (site_lat, site_lon)
-                distance_km = geodesic(tech_coords, site_coords).kilometers
-                duration_min = (distance_km / 50) * 60
-                
-                status = "💾 Cached" if not was_retried else "💾 Cached (Broad)"
-                tag = 'cached'
-                
-                results.append({
-                    'address': site['address'],
-                    'suburb': site['suburb'],
-                    'state': site['state'],
-                    'distance': distance_km,
-                    'duration': duration_min,
-                    'status': status,
-                    'tag': tag
-                })
-                
-                self.update_input_tree_status(site['address'], site['suburb'], 
-                                             site['state'], status, tag)
-                continue
-            
-            # Need to geocode this address
-            processed += 1
-            progress = f"⏳ Processing {processed}/{len(addresses_to_geocode)} ({progress_percent}%): {site['suburb']}"
-            self.status_var.set(progress)
-            self.root.update()
-            
-            # Try geocoding with original address
-            site_lat, site_lon, was_retried = self.geocode_address(full_address, False)
-            
-            # If failed, try broader search
-            if not site_lat:
-                time.sleep(1)
-                self.status_var.set(f"⚠ Retrying with broader search ({progress_percent}%): {site['suburb']}")
-                self.root.update()
-                site_lat, site_lon, was_retried = self.geocode_address(full_address, True)
-            
-            if site_lat and site_lon:
-                site_coords = (site_lat, site_lon)
-                # Calculate distance
-                distance_km = geodesic(tech_coords, site_coords).kilometers
-                
-                # Estimate duration (50 km/h average)
-                duration_min = (distance_km / 50) * 60
-                
-                # Cache the geocoding result
-                self.geocode_cache[cache_key] = {
-                    'lat': site_lat,
-                    'lon': site_lon,
-                    'was_retried': was_retried
-                }
-                
-                # Update site data with geocoding info
-                site['lat'] = site_lat
-                site['lon'] = site_lon
-                site['was_retried'] = was_retried
-                site['status'] = 'geocoded'
-                
-                status = "✓ Found" if not was_retried else "⚠ Broad Match"
-                tag = 'normal' if not was_retried else 'retried'
-                
-                results.append({
-                    'address': site['address'],
-                    'suburb': site['suburb'],
-                    'state': site['state'],
-                    'distance': distance_km,
-                    'duration': duration_min,
-                    'status': status,
-                    'tag': tag
-                })
-                
-                self.update_input_tree_status(site['address'], site['suburb'], 
-                                             site['state'], status, tag)
-            else:
-                results.append({
-                    'address': site['address'],
-                    'suburb': site['suburb'],
-                    'state': site['state'],
-                    'distance': float('inf'),
-                    'duration': float('inf'),
-                    'status': '✗ Not Found',
-                    'tag': 'error'
-                })
-                
-                self.update_input_tree_status(site['address'], site['suburb'], 
-                                             site['state'], '✗ Not Found', 'error')
-            
-            time.sleep(1)  # Respect API rate limit
-        
-        # Complete progress bar
-        self.progress['value'] = total_steps
-        self.root.update()
-        time.sleep(0.3)  # Brief pause to show completion
-        
-        # Sort by distance
-        results.sort(key=lambda x: x['distance'])
-        
-        # Display results
-        success_count = 0
-        retry_count = 0
-        error_count = 0
-        cached_result_count = 0
-        
-        for rank, result in enumerate(results, 1):
-            if result['distance'] == float('inf'):
-                self.results_tree.insert('', tk.END, values=(
-                    rank,
-                    result['address'],
-                    result['suburb'],
-                    result['state'],
-                    'N/A',
-                    'N/A',
-                    result['status']
-                ), tags=('error',))
-                error_count += 1
-            else:
-                if result['tag'] == 'cached':
-                    tag = 'cached'
-                    cached_result_count += 1
-                elif result['tag'] == 'normal':
-                    tag = 'success'
-                    success_count += 1
-                else:
-                    tag = 'warning'
-                    retry_count += 1
-                    
-                self.results_tree.insert('', tk.END, values=(
-                    rank,
-                    result['address'],
-                    result['suburb'],
-                    result['state'],
-                    f"{result['distance']:.2f}",
-                    f"{result['duration']:.0f}",
-                    result['status']
-                ), tags=(tag,))
-        
-        # Hide progress bar
-        self.progress.grid_remove()
-        
-        summary_parts = []
-        if success_count > 0:
-            summary_parts.append(f"{success_count} found")
-        if cached_result_count > 0:
-            summary_parts.append(f"{cached_result_count} cached")
-        if retry_count > 0:
-            summary_parts.append(f"{retry_count} broad matches")
-        if error_count > 0:
-            summary_parts.append(f"{error_count} not found")
-        
-        summary = f"✓ Complete! " + ", ".join(summary_parts)
-        self.status_var.set(summary)
-        
-        if error_count > 0 or cached_result_count > 0:
-            msg_parts = ["Calculation complete!\n"]
-            if success_count > 0:
-                msg_parts.append(f"✓ Successfully geocoded: {success_count}")
-            if cached_result_count > 0:
-                msg_parts.append(f"💾 Used cached data: {cached_result_count}")
-            if retry_count > 0:
-                msg_parts.append(f"⚠ Broad matches: {retry_count}")
-            if error_count > 0:
-                msg_parts.append(f"✗ Not found: {error_count}")
-            msg_parts.append("\nCheck the Status column for details.")
-            
-            messagebox.showinfo("Results Summary", "\n".join(msg_parts))
+        self.stop_calculation = False
+        self.calculation_thread = threading.Thread(
+            target=self.calculate_distances_worker,
+            args=(tech_addr,),
+            daemon=True
+        )
+        self.calculation_thread.start()
 
 if __name__ == "__main__":
     root = tk.Tk()
