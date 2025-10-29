@@ -1,5 +1,6 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import messagebox
+import customtkinter as ctk
 import requests
 import time
 from geopy.distance import geodesic
@@ -8,41 +9,62 @@ import re
 import threading
 from queue import Queue
 
+# Configure CustomTkinter
+ctk.set_appearance_mode("dark")  # "dark" or "light"
+ctk.set_default_color_theme("blue")  # "blue", "green", "dark-blue"
+
+class GlassFrame(ctk.CTkFrame):
+    """Custom glassmorphic frame with semi-transparent effect"""
+    def __init__(self, master, **kwargs):
+        # Extract custom parameters
+        glass_color = kwargs.pop('glass_color', ("#e8ecf1", "#2b3e50"))
+        border_color = kwargs.pop('border_color', ("#b8c5d6", "#3a4f6f"))
+        
+        super().__init__(
+            master,
+            fg_color=glass_color,
+            border_width=2,
+            border_color=border_color,
+            corner_radius=12,
+            **kwargs
+        )
+
 class AddressDistanceCalculator:
     def __init__(self, root):
         self.root = root
         self.root.title("Address Distance Calculator")
-        self.root.geometry("1200x800")
+        self.root.geometry("1000x650")
+        self.root.minsize(900, 600)
         
-        # Configure modern color scheme
+        # Theme state
+        self.current_theme = "dark"
+        
+        # Modern glassmorphic color scheme
         self.colors = {
-            'bg_gradient_start': '#0f0c29',
-            'bg_gradient_end': '#24243e',
-            'glass_bg': '#ffffff',
-            'glass_border': '#e0e0e0',
-            'accent': '#6366f1',
-            'accent_hover': '#4f46e5',
-            'success': '#10b981',
-            'warning': '#f59e0b',
-            'error': '#ef4444',
-            'text_primary': '#1f2937',
-            'text_secondary': '#6b7280',
-            'shadow': '#00000020'
+            'bg_primary': '#1a1a2e',
+            'bg_secondary': '#16213e',
+            'glass_bg': ('#e8ecf1', '#2b3e50'),
+            'glass_border': ('#b8c5d6', '#3a4f6f'),
+            'accent': '#0f4c75',
+            'accent_hover': '#3282b8',
+            'success': '#2ecc71',
+            'warning': '#f39c12',
+            'error': '#e74c3c',
+            'text_primary': '#ecf0f1',
+            'text_secondary': '#95a5a6'
         }
-        
-        self.root.configure(bg='#1a1a2e')
         
         # Store site addresses with geocoding cache
         self.site_addresses = []
         self.geocode_cache = {}
-        self.all_results = []  # Store all results for filtering
+        self.all_results = []
         
         # Filter states
         self.filter_vars = {
-            'success': tk.BooleanVar(value=True),
-            'cached': tk.BooleanVar(value=True),
-            'broad': tk.BooleanVar(value=True),
-            'not_found': tk.BooleanVar(value=True)
+            'success': ctk.BooleanVar(value=True),
+            'cached': ctk.BooleanVar(value=True),
+            'broad': ctk.BooleanVar(value=True),
+            'not_found': ctk.BooleanVar(value=True)
         }
         
         # Threading control
@@ -52,676 +74,793 @@ class AddressDistanceCalculator:
         
         # Column selection for copying
         self.selected_columns = set()
-        self.is_selecting_columns = False
         
-        # Cell selection for Excel-like copying
-        self.cell_selection = {
-            'active': False,
-            'start_item': None,
-            'start_col': None,
-            'end_item': None,
-            'end_col': None,
-            'selected_cells': set()
-        }
+        # Table cell selection for Excel-like behavior
+        self.selected_cells = set()  # Set of (row, col) tuples
+        self.selection_start = None  # Starting cell for drag selection
+        self.is_dragging = False
+        self.last_clicked_cell = None  # For shift-click range selection
         
-        self.setup_modern_styles()
         self.create_ui()
+        
+        # Bind keyboard shortcuts for results table
+        self.root.bind('<Control-a>', lambda e: self.select_all_results())
+        self.root.bind('<Control-c>', lambda e: self.copy_results_smart())
+        self.root.bind('<Escape>', lambda e: self.clear_cell_selection())
         
         # Start result queue processor
         self.process_queue()
     
-    def setup_modern_styles(self):
-        """Setup modern visual styles"""
-        style = ttk.Style()
-        style.theme_use('clam')
-        
-        # Configure Treeview colors
-        style.configure("Modern.Treeview",
-                       background="white",
-                       foreground=self.colors['text_primary'],
-                       fieldbackground="white",
-                       borderwidth=0,
-                       font=('Segoe UI', 9))
-        style.configure("Modern.Treeview.Heading",
-                       background=self.colors['accent'],
-                       foreground="white",
-                       borderwidth=0,
-                       font=('Segoe UI', 9, 'bold'))
-        style.map('Modern.Treeview.Heading',
-                 background=[('active', self.colors['accent_hover'])])
-        
-        # Selected column heading style
-        style.configure("Selected.Treeview.Heading",
-                       background='#10b981',
-                       foreground="white",
-                       borderwidth=0,
-                       font=('Segoe UI', 9, 'bold'))
-        
-        style.configure("Modern.Horizontal.TProgressbar",
-                       troughcolor='#2d3748',
-                       background=self.colors['accent'],
-                       borderwidth=0,
-                       thickness=6)
-        
-        # Checkbutton style
-        style.configure("Modern.TCheckbutton",
-                       background='white',
-                       foreground=self.colors['text_primary'],
-                       font=('Segoe UI', 9))
-    
     def create_ui(self):
-        """Create the user interface"""
-        main_frame = tk.Frame(self.root, bg='#1a1a2e')
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=20, pady=20)
+        """Create the modern glassmorphic user interface"""
+        # Main container with glassmorphic effect
+        main_frame = ctk.CTkFrame(self.root, fg_color="transparent")
+        main_frame.grid(row=0, column=0, sticky="nsew", padx=15, pady=15)
         
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(0, weight=1)
+        self.root.grid_columnconfigure(0, weight=1)
+        self.root.grid_rowconfigure(0, weight=1)
+        main_frame.grid_columnconfigure(0, weight=1)
+        main_frame.grid_columnconfigure(1, weight=1)
         
-        # Title
-        title_frame = tk.Frame(main_frame, bg='#1a1a2e')
-        title_frame.grid(row=0, column=0, sticky=tk.W, pady=(0, 20))
+        # Title Section - compact with theme toggle
+        title_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        title_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        title_frame.grid_columnconfigure(0, weight=1)
         
-        title_label = tk.Label(title_frame, text="📍 Address Distance Calculator", 
-                               font=('Segoe UI', 20, 'bold'),
-                               bg='#1a1a2e', fg='white')
-        title_label.pack(anchor=tk.W)
+        # Left side - titles
+        title_left = ctk.CTkFrame(title_frame, fg_color="transparent")
+        title_left.grid(row=0, column=0, sticky="w")
         
-        subtitle_label = tk.Label(title_frame, text="Calculate optimal routes with precision • Powered by OSRM", 
-                                 font=('Segoe UI', 10),
-                                 bg='#1a1a2e', fg='#9ca3af')
-        subtitle_label.pack(anchor=tk.W)
+        title_label = ctk.CTkLabel(
+            title_left, 
+            text="Address Distance Calculator",
+            font=ctk.CTkFont(family="Segoe UI", size=24, weight="bold"),
+            text_color="#3282b8"
+        )
+        title_label.pack(anchor="w")
         
-        # Technician Address Section
-        tech_container = self.create_glass_frame(main_frame, "🏠 Technician Base Address")
-        tech_container.container.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
+        subtitle_label = ctk.CTkLabel(
+            title_left,
+            text="Powered by Support AV Services - Operations & Integrations",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color="#95a5a6"
+        )
+        subtitle_label.pack(anchor="w")
         
-        self.tech_address = tk.Text(tech_container, height=2, width=80, 
-                                    font=('Segoe UI', 10),
-                                    bg='white', fg=self.colors['text_primary'],
-                                    relief=tk.FLAT, borderwidth=0,
-                                    insertbackground=self.colors['accent'])
-        self.tech_address.grid(row=0, column=0, pady=8, padx=15, sticky=(tk.W, tk.E))
+        # Right side - theme toggle
+        self.theme_btn = ctk.CTkButton(
+            title_frame,
+            text="☀️ Light Mode",
+            command=self.toggle_theme,
+            width=130,
+            height=34,
+            corner_radius=8,
+            fg_color="#34495e",
+            hover_color="#2c3e50",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold")
+        )
+        self.theme_btn.grid(row=0, column=1, sticky="e", padx=(10, 0))
+        
+        # LEFT COLUMN - Input Section
+        left_column = ctk.CTkFrame(main_frame, fg_color="transparent")
+        left_column.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
+        left_column.grid_columnconfigure(0, weight=1)
+        left_column.grid_rowconfigure(1, weight=1)
+        
+        # Technician Address Section - compact
+        tech_frame = GlassFrame(left_column, glass_color=self.colors['glass_bg'])
+        tech_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        tech_frame.grid_columnconfigure(0, weight=1)
+        
+        ctk.CTkLabel(
+            tech_frame,
+            text="Technician Address",
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            anchor="w"
+        ).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 4))
+        
+        self.tech_address = ctk.CTkTextbox(
+            tech_frame, 
+            height=35,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            corner_radius=6,
+            border_width=2,
+            border_color=self.colors['glass_border']
+        )
+        self.tech_address.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
         
         # Site Addresses Section
-        site_container = self.create_glass_frame(main_frame, "📋 Site Addresses")
-        site_container.container.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 15))
+        site_frame = GlassFrame(left_column, glass_color=self.colors['glass_bg'])
+        site_frame.grid(row=1, column=0, sticky="nsew", pady=(0, 10))
+        site_frame.grid_columnconfigure(0, weight=1)
+        site_frame.grid_rowconfigure(1, weight=1)
         
-        instruction_text = "💡 Paste addresses in any format: Excel columns, comma-separated, or line-by-line"
-        instruction_label = tk.Label(site_container, text=instruction_text, 
-                                    font=('Segoe UI', 9),
-                                    bg='white', fg=self.colors['accent'])
-        instruction_label.grid(row=0, column=0, sticky=tk.W, pady=(8, 8), padx=15)
+        # Header with compact legend
+        header_frame = ctk.CTkFrame(site_frame, fg_color="transparent")
+        header_frame.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 6))
+        header_frame.grid_columnconfigure(0, weight=1)
         
-        # Input table container
-        input_container = tk.Frame(site_container, bg='white')
-        input_container.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=15, pady=(0, 10))
-        input_container.columnconfigure(0, weight=1)
-        input_container.rowconfigure(0, weight=1)
+        ctk.CTkLabel(
+            header_frame,
+            text="Site Addresses",
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            anchor="w"
+        ).grid(row=0, column=0, sticky="w")
         
-        # Create input table
-        input_columns = ('Status', 'Address', 'Suburb', 'State')
-        self.input_tree = ttk.Treeview(input_container, columns=input_columns, 
-                                       show='headings', height=6, style="Modern.Treeview")
+        # Compact legend below title
+        legend_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
+        legend_frame.grid(row=1, column=0, sticky="w", pady=(4, 0))
         
-        self.input_tree.heading('Status', text='Status')
-        self.input_tree.heading('Address', text='Address')
-        self.input_tree.heading('Suburb', text='Suburb')
-        self.input_tree.heading('State', text='State')
+        ctk.CTkLabel(
+            legend_frame,
+            text="Legend:",
+            font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
+            text_color="#95a5a6"
+        ).pack(side="left", padx=(0, 6))
         
-        self.input_tree.column('Status', width=100, anchor='center')
-        self.input_tree.column('Address', width=450)
-        self.input_tree.column('Suburb', width=180)
-        self.input_tree.column('State', width=120)
+        self.create_legend_item(legend_frame, "✓", "#2ecc71")
+        self.create_legend_item(legend_frame, "💾", "#3498db")
+        self.create_legend_item(legend_frame, "⚠", "#f39c12")
+        self.create_legend_item(legend_frame, "✗", "#e74c3c")
         
-        self.input_tree.tag_configure('normal', background='white')
-        self.input_tree.tag_configure('pending', background='#f3f4f6')
-        self.input_tree.tag_configure('cached', background='#dbeafe', foreground='#1e40af')
-        self.input_tree.tag_configure('retried', background='#fef3c7', foreground='#92400e')
-        self.input_tree.tag_configure('error', background='#fee2e2', foreground='#991b1b')
-        
-        self.input_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        input_scrollbar = ttk.Scrollbar(input_container, orient=tk.VERTICAL, 
-                                       command=self.input_tree.yview)
-        input_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
-        self.input_tree.configure(yscrollcommand=input_scrollbar.set)
-        
-        # Paste area
-        paste_container = tk.Frame(
-            site_container,
-            bg='#f3f4f6',
-            highlightbackground=self.colors['accent'],
-            highlightthickness=2,
-            bd=0,
-            relief=tk.FLAT
+        # Input table container with scrollable frame
+        self.input_scroll = ctk.CTkScrollableFrame(
+            site_frame,
+            height=180,
+            corner_radius=6,
+            border_width=2,
+            border_color=self.colors['glass_border'],
+            fg_color=("#f5f7fa", "#1c2833")
         )
-        paste_container.grid(row=2, column=0, pady=(0, 10), padx=15, sticky=(tk.W, tk.E))
-        paste_container.columnconfigure(1, weight=1)
+        self.input_scroll.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 6))
+        self.input_scroll.grid_columnconfigure(2, weight=1)
         
-        paste_label = tk.Label(paste_container, text="📋 Paste Area:", 
-                              font=('Segoe UI', 9, 'bold'),
-                              bg='white', fg=self.colors['text_primary'])
-        paste_label.grid(row=0, column=0, padx=(0, 10), sticky=tk.W)
+        # Compact headers for input table with checkbox column
+        headers = ["", "Status", "Address", "Suburb", "State"]
+        widths = [30, 80, 230, 100, 55]
+        for idx, (header, width) in enumerate(zip(headers, widths)):
+            anchor = "w" if idx == 2 else "center"
+            ctk.CTkLabel(
+                self.input_scroll, 
+                text=header,
+                width=width,
+                font=ctk.CTkFont(weight="bold", size=11),
+                anchor=anchor
+            ).grid(row=0, column=idx, padx=3, pady=3, sticky="w" if idx == 2 else "")
         
-        self.paste_entry = tk.Text(paste_container, height=3, 
-                                   font=('Segoe UI', 10),
-                                   bg='#f9fafb', fg=self.colors['text_primary'],
-                                   relief=tk.FLAT, borderwidth=1,
-                                   insertbackground=self.colors['accent'])
-        self.paste_entry.grid(row=0, column=1, sticky=(tk.W, tk.E))
-        self.paste_entry.bind('<Control-v>', self.handle_paste)
-        self.paste_entry.bind('<Command-v>', self.handle_paste)
+        self.input_rows = []
         
-        # Buttons
-        button_frame = tk.Frame(main_frame, bg='#1a1a2e')
-        button_frame.grid(row=3, column=0, pady=(0, 15))
+        # Compact paste area
+        paste_frame = ctk.CTkFrame(site_frame, fg_color="transparent")
+        paste_frame.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 6))
+        paste_frame.grid_columnconfigure(1, weight=1)
         
-        self.add_btn = self.create_modern_button(button_frame, "➕ Add Addresses", 
-                                                 self.process_pasted_data, 'accent')
-        self.add_btn.pack(side=tk.LEFT, padx=5)
+        ctk.CTkLabel(
+            paste_frame, 
+            text="Paste:",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color="#95a5a6"
+        ).grid(row=0, column=0, padx=(0, 8), sticky="w")
         
-        self.remove_btn = self.create_modern_button(button_frame, "❌ Remove Selected", 
-                                                     self.remove_selected, 'secondary')
-        self.remove_btn.pack(side=tk.LEFT, padx=5)
+        self.paste_entry = ctk.CTkTextbox(
+            paste_frame,
+            height=45,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            corner_radius=6,
+            border_width=2,
+            border_color=self.colors['glass_border']
+        )
+        self.paste_entry.grid(row=0, column=1, sticky="ew")
         
-        self.clear_btn = self.create_modern_button(button_frame, "🗑️ Clear All", 
-                                                    self.clear_sites, 'secondary')
-        self.clear_btn.pack(side=tk.LEFT, padx=5)
+        # Buttons - improved layout and colors (responsive)
+        button_frame = ctk.CTkFrame(site_frame, fg_color="transparent")
+        button_frame.grid(row=3, column=0, sticky="ew", pady=(0, 10), padx=12)
+        button_frame.grid_columnconfigure(0, weight=1)
         
-        self.calc_btn = self.create_modern_button(button_frame, "🚀 Calculate Distances", 
-                                                   self.calculate_distances, 'primary')
-        self.calc_btn.pack(side=tk.LEFT, padx=15)
+        # Top row - Add, Remove, Clear buttons
+        top_btn_frame = ctk.CTkFrame(button_frame, fg_color="transparent")
+        top_btn_frame.grid(row=0, column=0, sticky="ew", pady=(0, 5))
+        top_btn_frame.grid_columnconfigure((0, 1, 2), weight=1)
         
-        self.copy_btn = self.create_modern_button(button_frame, "📄 Copy Selected Columns", 
-                                                   self.copy_selected_columns_data, 'secondary')
-        self.copy_btn.pack(side=tk.LEFT, padx=5)
+        self.add_btn = ctk.CTkButton(
+            top_btn_frame,
+            text="➕ Add",
+            command=self.process_pasted_data,
+            height=34,
+            corner_radius=8,
+            fg_color="#27ae60",
+            hover_color="#229954",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold")
+        )
+        self.add_btn.grid(row=0, column=0, sticky="ew", padx=2)
         
-        # Legend
-        legend_frame = tk.Frame(main_frame, bg='#1a1a2e')
-        legend_frame.grid(row=4, column=0, pady=(0, 15))
+        self.remove_btn = ctk.CTkButton(
+            top_btn_frame,
+            text="✖ Remove",
+            command=self.remove_selected,
+            height=34,
+            corner_radius=8,
+            fg_color="#e74c3c",
+            hover_color="#c0392b",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold")
+        )
+        self.remove_btn.grid(row=0, column=1, sticky="ew", padx=2)
         
-        legend_title = tk.Label(legend_frame, text="Legend:", 
-                               font=('Segoe UI', 9, 'bold'),
-                               bg='#1a1a2e', fg='white')
-        legend_title.pack(side=tk.LEFT, padx=5)
+        self.clear_btn = ctk.CTkButton(
+            top_btn_frame,
+            text="🗑 Clear All",
+            command=self.clear_sites,
+            height=34,
+            corner_radius=8,
+            fg_color="#e67e22",
+            hover_color="#d35400",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold")
+        )
+        self.clear_btn.grid(row=0, column=2, sticky="ew", padx=2)
         
-        self.create_legend_item(legend_frame, " ✓ Success ", '#d1fae5', '#065f46')
-        self.create_legend_item(legend_frame, " 💾 Cached ", '#dbeafe', '#1e40af')
-        self.create_legend_item(legend_frame, " ⚠ Broad Match ", '#fef3c7', '#92400e')
-        self.create_legend_item(legend_frame, " ✗ Not Found ", '#fee2e2', '#991b1b')
+        # Bottom row - Calculate button (full width)
+        self.calc_btn = ctk.CTkButton(
+            button_frame,
+            text="🚀 Calculate Distances",
+            command=self.calculate_distances,
+            height=38,
+            corner_radius=8,
+            fg_color="#3282b8",
+            hover_color="#0f4c75",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold")
+        )
+        self.calc_btn.grid(row=1, column=0, sticky="ew")
         
-        # Results Table with Filters
-        results_container = self.create_glass_frame(main_frame, "📊 Results (Ranked by Distance)")
-        results_container.container.grid(row=5, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 15))
-        results_container.columnconfigure(0, weight=1)
+        # RIGHT COLUMN - Results Section
+        right_column = ctk.CTkFrame(main_frame, fg_color="transparent")
+        right_column.grid(row=1, column=1, sticky="nsew", padx=(8, 0))
+        right_column.grid_columnconfigure(0, weight=1)
+        right_column.grid_rowconfigure(0, weight=1)
         
-        # Filter controls
-        filter_frame = tk.Frame(results_container, bg='white')
-        filter_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=15, pady=(8, 8))
+        # Results Section
+        results_frame = GlassFrame(right_column, glass_color=self.colors['glass_bg'])
+        results_frame.grid(row=0, column=0, sticky="nsew")
+        results_frame.grid_columnconfigure(0, weight=1)
+        results_frame.grid_rowconfigure(2, weight=1)
         
-        filter_label = tk.Label(filter_frame, text="🔍 Show:", 
-                               font=('Segoe UI', 9, 'bold'),
-                               bg='white', fg=self.colors['text_primary'])
-        filter_label.pack(side=tk.LEFT, padx=(0, 10))
+        # Header with Copy button
+        results_header_frame = ctk.CTkFrame(results_frame, fg_color="transparent")
+        results_header_frame.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 6))
+        results_header_frame.grid_columnconfigure(0, weight=1)
         
-        # Filter checkboxes
-        ttk.Checkbutton(filter_frame, text="✓ Found", 
-                       variable=self.filter_vars['success'],
-                       command=self.apply_filters,
-                       style="Modern.TCheckbutton").pack(side=tk.LEFT, padx=5)
+        ctk.CTkLabel(
+            results_header_frame,
+            text="Results",
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            anchor="w"
+        ).grid(row=0, column=0, sticky="w")
         
-        ttk.Checkbutton(filter_frame, text="💾 Cached", 
-                       variable=self.filter_vars['cached'],
-                       command=self.apply_filters,
-                       style="Modern.TCheckbutton").pack(side=tk.LEFT, padx=5)
+        # Selection info label
+        self.selection_info_label = ctk.CTkLabel(
+            results_header_frame,
+            text="",
+            font=ctk.CTkFont(family="Segoe UI", size=9),
+            text_color="#7f8c8d",
+            anchor="w"
+        )
+        self.selection_info_label.grid(row=1, column=0, sticky="w", pady=(2, 0))
         
-        ttk.Checkbutton(filter_frame, text="⚠ Broad Match", 
-                       variable=self.filter_vars['broad'],
-                       command=self.apply_filters,
-                       style="Modern.TCheckbutton").pack(side=tk.LEFT, padx=5)
+        self.copy_btn = ctk.CTkButton(
+            results_header_frame,
+            text="📋 Copy Results",
+            command=self.copy_results_smart,
+            width=140,
+            height=32,
+            corner_radius=8,
+            fg_color="#16a085",
+            hover_color="#138d75",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold")
+        )
+        self.copy_btn.grid(row=0, column=1, sticky="e", padx=(10, 0))
         
-        ttk.Checkbutton(filter_frame, text="✗ Not Found", 
-                       variable=self.filter_vars['not_found'],
-                       command=self.apply_filters,
-                       style="Modern.TCheckbutton").pack(side=tk.LEFT, padx=5)
+        # Compact filter controls
+        filter_frame = ctk.CTkFrame(results_frame, fg_color="transparent")
+        filter_frame.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 6))
         
-        # Column selection hint
-        hint_label = tk.Label(filter_frame, text="💡 Drag to select cells, Ctrl+C to copy • Click headers for column copy", 
-                             font=('Segoe UI', 8, 'italic'),
-                             bg='white', fg=self.colors['text_secondary'])
-        hint_label.pack(side=tk.RIGHT, padx=10)
+        ctk.CTkLabel(
+            filter_frame,
+            text="Show:",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#95a5a6"
+        ).pack(side="left", padx=(0, 8))
         
-        # Results treeview
-        results_tree_container = tk.Frame(results_container, bg='white')
-        results_tree_container.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=15, pady=(0, 10))
-        results_tree_container.columnconfigure(0, weight=1)
-        results_tree_container.rowconfigure(0, weight=1)
+        ctk.CTkCheckBox(
+            filter_frame,
+            text="Found",
+            variable=self.filter_vars['success'],
+            command=self.apply_filters,
+            fg_color="#27ae60",
+            hover_color="#229954",
+            corner_radius=5,
+            font=ctk.CTkFont(size=11),
+            checkbox_width=18,
+            checkbox_height=18
+        ).pack(side="left", padx=3)
         
-        result_columns = ('Rank', 'Address', 'Suburb', 'State', 'Distance (km)', 
-                         'Duration (min)', 'Status')
-        self.results_tree = ttk.Treeview(results_tree_container, columns=result_columns, 
-                                        show='headings', height=8, style="Modern.Treeview")
+        ctk.CTkCheckBox(
+            filter_frame,
+            text="Cached",
+            variable=self.filter_vars['cached'],
+            command=self.apply_filters,
+            fg_color="#3498db",
+            hover_color="#2980b9",
+            corner_radius=5,
+            font=ctk.CTkFont(size=11),
+            checkbox_width=18,
+            checkbox_height=18
+        ).pack(side="left", padx=3)
         
-        # Bind column header clicks for selection
-        for col in result_columns:
-            self.results_tree.heading(col, text=col, 
-                                     command=lambda c=col: self.toggle_column_selection(c))
+        ctk.CTkCheckBox(
+            filter_frame,
+            text="Broad",
+            variable=self.filter_vars['broad'],
+            command=self.apply_filters,
+            fg_color="#f39c12",
+            hover_color="#e67e22",
+            corner_radius=5,
+            font=ctk.CTkFont(size=11),
+            checkbox_width=18,
+            checkbox_height=18
+        ).pack(side="left", padx=3)
         
-        self.results_tree.column('Rank', width=50, anchor='center')
-        self.results_tree.column('Address', width=350)
-        self.results_tree.column('Suburb', width=150)
-        self.results_tree.column('State', width=100)
-        self.results_tree.column('Distance (km)', width=120, anchor='center')
-        self.results_tree.column('Duration (min)', width=120, anchor='center')
-        self.results_tree.column('Status', width=150, anchor='center')
+        ctk.CTkCheckBox(
+            filter_frame,
+            text="Not Found",
+            variable=self.filter_vars['not_found'],
+            command=self.apply_filters,
+            fg_color="#e74c3c",
+            hover_color="#c0392b",
+            corner_radius=5,
+            font=ctk.CTkFont(size=11),
+            checkbox_width=18,
+            checkbox_height=18
+        ).pack(side="left", padx=3)
         
-        self.results_tree.tag_configure('success', background='#d1fae5', foreground='#065f46')
-        self.results_tree.tag_configure('cached', background='#dbeafe', foreground='#1e40af')
-        self.results_tree.tag_configure('warning', background='#fef3c7', foreground='#92400e')
-        self.results_tree.tag_configure('error', background='#fee2e2', foreground='#991b1b')
+        # Results table
+        self.results_scroll = ctk.CTkScrollableFrame(
+            results_frame,
+            corner_radius=6,
+            border_width=2,
+            border_color=self.colors['glass_border'],
+            fg_color=("#f5f7fa", "#1c2833")
+        )
+        self.results_scroll.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 10))
+        self.results_scroll.grid_columnconfigure(1, weight=1)
         
-        self.results_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        # Compact headers for results table with click selection
+        result_headers = ["Rank", "Address", "Suburb", "State", "Dist(km)", "Time(min)", "Status"]
+        result_widths = [45, 200, 90, 50, 75, 80, 120]
+        self.result_header_labels = []
         
-        # Enable Excel-like cell selection
-        self.results_tree.bind('<Button-1>', self.on_cell_click)
-        self.results_tree.bind('<B1-Motion>', self.on_cell_drag)
-        self.results_tree.bind('<ButtonRelease-1>', self.on_cell_release)
+        for idx, (header, width) in enumerate(zip(result_headers, result_widths)):
+            anchor = "w" if idx == 1 else "center"
+            header_label = ctk.CTkLabel(
+                self.results_scroll, 
+                text=header,
+                width=width,
+                font=ctk.CTkFont(weight="bold", size=11),
+                anchor=anchor,
+                cursor="hand2"
+            )
+            header_label.grid(row=0, column=idx, padx=2, pady=3, sticky="w" if idx == 1 else "")
+            header_label.bind("<Button-1>", lambda e, col=idx: self.select_column(col))
+            self.result_header_labels.append(header_label)
         
-        # Enable copying from results tree
-        self.results_tree.bind('<Control-c>', self.copy_selected_cells)
-        self.results_tree.bind('<Command-c>', self.copy_selected_cells)
+        self.results_rows = []
         
-        results_scrollbar = ttk.Scrollbar(results_tree_container, orient=tk.VERTICAL, 
-                                         command=self.results_tree.yview)
-        results_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
-        self.results_tree.configure(yscrollcommand=results_scrollbar.set)
+        # Status bar - full width at bottom
+        status_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        status_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        status_frame.grid_columnconfigure(0, weight=1)
         
-        # Status bar
-        status_frame = tk.Frame(main_frame, bg='#1a1a2e')
-        status_frame.grid(row=6, column=0, sticky=(tk.W, tk.E))
-        status_frame.columnconfigure(0, weight=1)
+        self.status_var = tk.StringVar(value="✓ Ready to calculate distances")
         
-        self.status_var = tk.StringVar()
-        self.status_var.set("✓ Ready - Paste addresses and click 'Add Addresses'")
+        self.status_label = ctk.CTkLabel(
+            status_frame,
+            textvariable=self.status_var,
+            anchor="w",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            fg_color=("#d5dce4", "#34495e"),
+            corner_radius=6,
+            height=32
+        )
+        self.status_label.grid(row=0, column=0, sticky="ew", pady=(0, 6), padx=2)
         
-        status_bar = tk.Label(status_frame, textvariable=self.status_var, 
-                             bg='#2d3748', fg='white',
-                             anchor=tk.W, font=('Segoe UI', 9),
-                             padx=15, pady=8)
-        status_bar.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 8))
-        
-        self.progress = ttk.Progressbar(status_frame, mode='determinate', 
-                                       style="Modern.Horizontal.TProgressbar")
-        self.progress.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        self.progress = ctk.CTkProgressBar(
+            status_frame,
+            corner_radius=6,
+            height=10,
+            progress_color="#27ae60",
+            fg_color=("#d5dce4", "#34495e")
+        )
+        self.progress.grid(row=1, column=0, sticky="ew", padx=2)
+        self.progress.set(0)
         self.progress.grid_remove()
         
-        # Configure row weights
-        main_frame.rowconfigure(2, weight=1)
-        main_frame.rowconfigure(5, weight=2)
-        results_container.rowconfigure(1, weight=1)
+        # Configure weights for responsive layout
+        main_frame.grid_rowconfigure(1, weight=1)
     
-    def create_glass_frame(self, parent, title):
-        """Create a frame with glass morphism effect"""
-        container = tk.Frame(parent, bg='#1a1a2e')
-        container.configure(highlightbackground='#e5e7eb', highlightthickness=1)
-        container.columnconfigure(0, weight=1)
-        container.rowconfigure(1, weight=1)
-        
-        title_bar = tk.Frame(container, bg='white', height=35)
-        title_bar.grid(row=0, column=0, sticky=(tk.W, tk.E))
-        title_bar.grid_propagate(False)
-        
-        title_label = tk.Label(title_bar, text=title, 
-                              font=('Segoe UI', 11, 'bold'),
-                              bg='white', fg=self.colors['text_primary'],
-                              anchor=tk.W, padx=15)
-        title_label.pack(side=tk.LEFT, fill=tk.X, expand=True, pady=8)
-        
-        content = tk.Frame(container, bg='white', relief=tk.FLAT, borderwidth=0)
-        content.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        content.columnconfigure(0, weight=1)
-        content.rowconfigure(1, weight=1)
-        content.container = container
-        
-        return content
-    
-    def create_modern_button(self, parent, text, command, style_type='secondary'):
-        """Create a modern styled button"""
-        if style_type == 'primary':
-            bg_color = self.colors['accent']
-            fg_color = 'white'
-            hover_bg = self.colors['accent_hover']
-        elif style_type == 'accent':
-            bg_color = self.colors['success']
-            fg_color = 'white'
-            hover_bg = '#059669'
+    def toggle_theme(self):
+        """Toggle between light and dark themes"""
+        if self.current_theme == "dark":
+            # Switch to light mode
+            self.current_theme = "light"
+            ctk.set_appearance_mode("light")
+            self.theme_btn.configure(
+                text="🌙 Dark Mode",
+                fg_color="#2c3e50",
+                hover_color="#34495e"
+            )
+            # Update color scheme for light mode
+            self.update_theme_colors("light")
         else:
-            bg_color = '#6b7280'
-            fg_color = 'white'
-            hover_bg = '#4b5563'
-        
-        button = tk.Button(parent, text=text, command=command,
-                          bg=bg_color, fg=fg_color,
-                          font=('Segoe UI', 9, 'bold'),
-                          relief=tk.FLAT, borderwidth=0,
-                          padx=20, pady=10,
-                          cursor='hand2')
-        
-        button.bind('<Enter>', lambda e: button.config(bg=hover_bg))
-        button.bind('<Leave>', lambda e: button.config(bg=bg_color))
-        
-        return button
+            # Switch to dark mode
+            self.current_theme = "dark"
+            ctk.set_appearance_mode("dark")
+            self.theme_btn.configure(
+                text="☀️ Light Mode",
+                fg_color="#34495e",
+                hover_color="#2c3e50"
+            )
+            # Update color scheme for dark mode
+            self.update_theme_colors("dark")
     
-    def create_legend_item(self, parent, text, bg, fg):
-        """Create a legend item"""
-        label = tk.Label(parent, text=text, bg=bg, fg=fg,
-                        font=('Segoe UI', 8, 'bold'),
-                        padx=8, pady=4)
-        label.pack(side=tk.LEFT, padx=3)
+    def update_theme_colors(self, theme):
+        """Update UI elements based on theme"""
+        # This method can be extended to update specific elements if needed
+        pass
     
-    def on_cell_click(self, event):
-        """Handle cell click for Excel-like selection"""
-        region = self.results_tree.identify_region(event.x, event.y)
+    def create_legend_item(self, parent, text, color):
+        """Create a compact squared legend item"""
+        frame = ctk.CTkFrame(parent, fg_color=color, corner_radius=3, height=20, width=20)
+        frame.pack(side="left", padx=2)
+        frame.pack_propagate(False)
         
-        if region == "cell":
-            item = self.results_tree.identify_row(event.y)
-            column = self.results_tree.identify_column(event.x)
-            
-            if item and column:
-                # Clear previous selection
-                self.clear_cell_highlights()
-                
-                # Start new selection
-                self.cell_selection['active'] = True
-                self.cell_selection['start_item'] = item
-                self.cell_selection['start_col'] = column
-                self.cell_selection['end_item'] = item
-                self.cell_selection['end_col'] = column
-                self.cell_selection['selected_cells'] = {(item, column)}
-                
-                # Highlight selected cell
-                self.highlight_selected_cells()
+        label = ctk.CTkLabel(
+            frame,
+            text=text,
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+            text_color="white"
+        )
+        label.pack(expand=True)
     
-    def on_cell_drag(self, event):
-        """Handle cell drag for selecting multiple cells"""
-        if not self.cell_selection['active']:
+    def add_input_row(self, status, address, suburb, state, tag='pending'):
+        """Add a row to the input table"""
+        row_num = len(self.input_rows) + 1
+        
+        # Color coding based on tag - improved for light mode
+        colors = {
+            'pending': ('#7f8c8d', '#95a5a6'),  # darker for light mode, lighter for dark mode
+            'cached': '#3498db',
+            'success': '#27ae60',
+            'warning': '#e67e22',
+            'error': '#c0392b'
+        }
+        
+        fg_color = colors.get(tag, ('#7f8c8d', '#95a5a6'))
+        
+        # Create row frame with hover effect
+        row_frame = ctk.CTkFrame(self.input_scroll, fg_color="transparent")
+        row_frame.grid(row=row_num, column=0, columnspan=5, sticky="ew", pady=2)
+        row_frame.grid_columnconfigure(2, weight=1)
+        
+        # Checkbox for selection
+        var = ctk.BooleanVar(value=False)
+        checkbox = ctk.CTkCheckBox(
+            row_frame,
+            text="",
+            variable=var,
+            width=30,
+            checkbox_width=18,
+            checkbox_height=18,
+            corner_radius=4,
+            fg_color="#e74c3c",
+            hover_color="#c0392b"
+        )
+        checkbox.grid(row=0, column=0, padx=(3, 0))
+        
+        # Function to toggle checkbox when clicking on the row
+        def toggle_checkbox(event=None):
+            var.set(not var.get())
+        
+        # Create status label and keep reference for updates
+        status_label = ctk.CTkLabel(row_frame, text=status, width=80, font=ctk.CTkFont(size=10), text_color=fg_color)
+        status_label.grid(row=0, column=1, padx=3)
+        
+        address_label = ctk.CTkLabel(row_frame, text=address, width=230, font=ctk.CTkFont(size=10), anchor="w")
+        address_label.grid(row=0, column=2, padx=3, sticky="w")
+        
+        suburb_label = ctk.CTkLabel(row_frame, text=suburb, width=100, font=ctk.CTkFont(size=10))
+        suburb_label.grid(row=0, column=3, padx=3)
+        
+        state_label = ctk.CTkLabel(row_frame, text=state, width=55, font=ctk.CTkFont(size=10))
+        state_label.grid(row=0, column=4, padx=3)
+        
+        # Bind click events to row frame and all labels (but not checkbox)
+        row_frame.bind("<Button-1>", toggle_checkbox)
+        status_label.bind("<Button-1>", toggle_checkbox)
+        address_label.bind("<Button-1>", toggle_checkbox)
+        suburb_label.bind("<Button-1>", toggle_checkbox)
+        state_label.bind("<Button-1>", toggle_checkbox)
+        
+        self.input_rows.append({
+            'frame': row_frame, 
+            'address': address, 
+            'suburb': suburb, 
+            'state': state,
+            'checkbox_var': var,
+            'checkbox': checkbox,
+            'status_label': status_label  # Store reference to status label
+        })
+    
+    def update_input_row_status(self, row_index, status, tag):
+        """Update the status of an input row"""
+        if row_index >= len(self.input_rows):
             return
         
-        region = self.results_tree.identify_region(event.x, event.y)
+        # Color coding based on tag
+        colors = {
+            'pending': ('#7f8c8d', '#95a5a6'),
+            'cached': '#3498db',
+            'success': '#27ae60',
+            'warning': '#e67e22',
+            'error': '#c0392b'
+        }
         
-        if region == "cell":
-            item = self.results_tree.identify_row(event.y)
-            column = self.results_tree.identify_column(event.x)
+        fg_color = colors.get(tag, ('#7f8c8d', '#95a5a6'))
+        
+        # Update the status label
+        status_label = self.input_rows[row_index]['status_label']
+        status_label.configure(text=status, text_color=fg_color)
+    
+    def add_result_row(self, rank, address, suburb, state, distance, duration, status, tag='success'):
+        """Add a row to the results table with selectable cells"""
+        row_num = len(self.results_rows) + 1
+        
+        # Color coding based on tag
+        colors = {
+            'success': '#27ae60',
+            'cached': '#3498db',
+            'warning': '#e67e22',
+            'error': '#c0392b'
+        }
+        
+        fg_color = colors.get(tag, ('#7f8c8d', '#95a5a6'))
+        
+        # Create row frame
+        row_frame = ctk.CTkFrame(self.results_scroll, fg_color="transparent")
+        row_frame.grid(row=row_num, column=0, columnspan=7, sticky="ew", pady=2)
+        row_frame.grid_columnconfigure(1, weight=1)
+        
+        # Cell data and configuration
+        cell_data = [
+            (str(rank), 45, ctk.CTkFont(size=10, weight="bold"), ("#2c3e50", "#ecf0f1"), "center"),
+            (address, 200, ctk.CTkFont(size=10), None, "w"),
+            (suburb, 90, ctk.CTkFont(size=10), None, "center"),
+            (state, 50, ctk.CTkFont(size=10), None, "center"),
+            (distance, 75, ctk.CTkFont(size=10), "#3498db", "center"),
+            (duration, 80, ctk.CTkFont(size=10), "#3498db", "center"),
+            (status, 120, ctk.CTkFont(size=10, weight="bold"), fg_color, "center")
+        ]
+        
+        cells = []
+        for col_idx, (text, width, font, text_color, anchor) in enumerate(cell_data):
+            cell_label = ctk.CTkLabel(
+                row_frame, 
+                text=text, 
+                width=width, 
+                font=font, 
+                anchor=anchor,
+                cursor="hand2",
+                fg_color="transparent"
+            )
+            if text_color:
+                cell_label.configure(text_color=text_color)
             
-            if item and column:
-                self.cell_selection['end_item'] = item
-                self.cell_selection['end_col'] = column
-                
-                # Update selected cells
-                self.update_cell_selection()
-                self.highlight_selected_cells()
+            cell_label.grid(row=0, column=col_idx, padx=2, sticky="w" if anchor == "w" else "")
+            
+            # Bind mouse events for selection
+            cell_label.bind("<Button-1>", lambda e, r=row_num, c=col_idx: self.on_cell_click(e, r, c))
+            cell_label.bind("<Shift-Button-1>", lambda e, r=row_num, c=col_idx: self.on_cell_shift_click(e, r, c))
+            cell_label.bind("<Control-Button-1>", lambda e, r=row_num, c=col_idx: self.on_cell_ctrl_click(e, r, c))
+            cell_label.bind("<B1-Motion>", lambda e, r=row_num, c=col_idx: self.on_cell_drag(e, r, c))
+            cell_label.bind("<ButtonRelease-1>", lambda e: self.on_cell_release(e))
+            cell_label.bind("<Button-3>", lambda e, r=row_num, c=col_idx: self.show_cell_context_menu(e, r, c))
+            
+            cells.append(cell_label)
+        
+        self.results_rows.append({'frame': row_frame, 'cells': cells})
+    
+    def clear_input_rows(self):
+        """Clear all input rows"""
+        for row in self.input_rows:
+            row['frame'].destroy()
+        self.input_rows = []
+    
+    def clear_results_rows(self):
+        """Clear all result rows"""
+        for row in self.results_rows:
+            row['frame'].destroy()
+        self.results_rows = []
+        self.selected_cells.clear()
+        self.selection_start = None
+        self.last_clicked_cell = None
+    
+    def on_cell_click(self, event, row, col):
+        """Handle single cell click - clear previous selection and select this cell"""
+        self.clear_cell_selection()
+        self.selected_cells.add((row, col))
+        self.last_clicked_cell = (row, col)
+        self.selection_start = (row, col)
+        self.is_dragging = False
+        self.highlight_selected_cells()
+        
+    def on_cell_shift_click(self, event, row, col):
+        """Handle shift-click - select range from last clicked cell to this cell"""
+        if self.last_clicked_cell:
+            self.clear_cell_selection()
+            start_row, start_col = self.last_clicked_cell
+            end_row, end_col = row, col
+            
+            # Select rectangular range
+            for r in range(min(start_row, end_row), max(start_row, end_row) + 1):
+                for c in range(min(start_col, end_col), max(start_col, end_col) + 1):
+                    self.selected_cells.add((r, c))
+            
+            self.highlight_selected_cells()
+        else:
+            self.on_cell_click(event, row, col)
+    
+    def on_cell_ctrl_click(self, event, row, col):
+        """Handle ctrl-click - toggle cell selection"""
+        if (row, col) in self.selected_cells:
+            self.selected_cells.remove((row, col))
+        else:
+            self.selected_cells.add((row, col))
+        
+        self.last_clicked_cell = (row, col)
+        self.highlight_selected_cells()
+    
+    def on_cell_drag(self, event, row, col):
+        """Handle drag selection - select range from start to current cell"""
+        if self.selection_start:
+            self.is_dragging = True
+            self.clear_cell_selection()
+            
+            start_row, start_col = self.selection_start
+            
+            # Select rectangular range from start to current position
+            for r in range(min(start_row, row), max(start_row, row) + 1):
+                for c in range(min(start_col, col), max(start_col, col) + 1):
+                    self.selected_cells.add((r, c))
+            
+            self.highlight_selected_cells()
     
     def on_cell_release(self, event):
-        """Handle mouse release to finalize selection"""
-        if self.cell_selection['active']:
-            self.cell_selection['active'] = False
+        """Handle mouse release - finish drag selection"""
+        self.is_dragging = False
     
-    def update_cell_selection(self):
-        """Update the set of selected cells based on start and end"""
-        self.cell_selection['selected_cells'] = set()
+    def select_column(self, col):
+        """Select entire column when header is clicked"""
+        self.clear_cell_selection()
         
-        # Get all items and columns
-        all_items = self.results_tree.get_children()
-        all_columns = self.results_tree['columns']
+        # Select all cells in this column
+        for row_idx in range(1, len(self.results_rows) + 1):
+            self.selected_cells.add((row_idx, col))
         
-        # Find indices
-        start_item = self.cell_selection['start_item']
-        end_item = self.cell_selection['end_item']
-        start_col = self.cell_selection['start_col']
-        end_col = self.cell_selection['end_col']
+        self.last_clicked_cell = (1, col)
+        self.highlight_selected_cells()
+    
+    def clear_cell_selection(self):
+        """Clear all cell selections and remove highlights"""
+        for row_idx, row in enumerate(self.results_rows, start=1):
+            for col_idx, cell in enumerate(row['cells']):
+                cell.configure(fg_color="transparent")
+        self.selected_cells.clear()
         
-        if start_item not in all_items or end_item not in all_items:
-            return
-        
-        start_row_idx = all_items.index(start_item)
-        end_row_idx = all_items.index(end_item)
-        
-        # Normalize column identifiers (they're like '#1', '#2', etc.)
-        start_col_idx = int(start_col.replace('#', '')) - 1
-        end_col_idx = int(end_col.replace('#', '')) - 1
-        
-        # Ensure start is before end
-        min_row = min(start_row_idx, end_row_idx)
-        max_row = max(start_row_idx, end_row_idx)
-        min_col = min(start_col_idx, end_col_idx)
-        max_col = max(start_col_idx, end_col_idx)
-        
-        # Select all cells in the range
-        for row_idx in range(min_row, max_row + 1):
-            for col_idx in range(min_col, max_col + 1):
-                item = all_items[row_idx]
-                col = f'#{col_idx + 1}'
-                self.cell_selection['selected_cells'].add((item, col))
+        # Update selection info label
+        if hasattr(self, 'selection_info_label'):
+            self.selection_info_label.configure(text="")
     
     def highlight_selected_cells(self):
-        """Highlight selected cells (visual feedback)"""
-        # Clear previous highlights
-        self.clear_cell_highlights()
+        """Highlight all selected cells"""
+        # First clear all highlights
+        for row_idx, row in enumerate(self.results_rows, start=1):
+            for col_idx, cell in enumerate(row['cells']):
+                cell.configure(fg_color="transparent")
         
-        # We can't directly highlight individual cells in ttk.Treeview,
-        # but we can select rows
-        selected_items = {item for item, col in self.cell_selection['selected_cells']}
-        self.results_tree.selection_set(list(selected_items))
+        # Then highlight selected cells
+        selection_color = ("#b3d9ff", "#2d5f8f")  # Light blue for light mode, darker blue for dark mode
+        
+        for (row, col) in self.selected_cells:
+            if 1 <= row <= len(self.results_rows):
+                row_data = self.results_rows[row - 1]
+                if 0 <= col < len(row_data['cells']):
+                    row_data['cells'][col].configure(fg_color=selection_color)
+        
+        # Update selection info label
+        if self.selected_cells:
+            cell_count = len(self.selected_cells)
+            self.selection_info_label.configure(text=f"📌 {cell_count} cell(s) selected")
+        else:
+            self.selection_info_label.configure(text="")
     
-    def clear_cell_highlights(self):
-        """Clear cell highlights"""
-        self.results_tree.selection_remove(self.results_tree.selection())
-    
-    def copy_selected_cells(self, event=None):
-        """Copy selected cells in Excel format"""
-        if not self.cell_selection['selected_cells']:
-            # Fallback to copying selected rows
-            return self.copy_selected_rows(event)
-        
-        # Get all items and columns
-        all_items = self.results_tree.get_children()
-        all_columns = self.results_tree['columns']
-        
-        # Organize selected cells by row and column
-        cells_by_row = {}
-        for item, col in self.cell_selection['selected_cells']:
-            if item not in all_items:
-                continue
-            
-            row_idx = all_items.index(item)
-            col_idx = int(col.replace('#', '')) - 1
-            
-            if row_idx not in cells_by_row:
-                cells_by_row[row_idx] = {}
-            
-            values = self.results_tree.item(item, 'values')
-            if col_idx < len(values):
-                cells_by_row[row_idx][col_idx] = str(values[col_idx])
-        
-        # Build text output
-        lines = []
-        for row_idx in sorted(cells_by_row.keys()):
-            cols = cells_by_row[row_idx]
-            # Get column range
-            if cols:
-                min_col = min(cols.keys())
-                max_col = max(cols.keys())
-                
-                # Build row with all columns in range (empty if not selected)
-                row_values = []
-                for col_idx in range(min_col, max_col + 1):
-                    row_values.append(cols.get(col_idx, ''))
-                
-                lines.append('\t'.join(row_values))
-        
-        if lines:
-            text = '\n'.join(lines)
-            self.root.clipboard_clear()
-            self.root.clipboard_append(text)
-            
-            num_cells = len(self.cell_selection['selected_cells'])
-            num_rows = len(cells_by_row)
-            num_cols = max(len(cells) for cells in cells_by_row.values()) if cells_by_row else 0
-            
-            self.status_var.set(f"✓ Copied {num_rows} row(s) × {num_cols} column(s) ({num_cells} cells)")
-    
-    def copy_selected_rows(self, event=None):
-        """Copy selected rows with all columns"""
-        selected_items = self.results_tree.selection()
-        if not selected_items:
+    def copy_selected_cells(self):
+        """Copy selected cells to clipboard"""
+        if not self.selected_cells:
+            messagebox.showinfo("No Selection", "Please select cells to copy")
             return
         
+        # Sort selected cells by row then column
+        sorted_cells = sorted(list(self.selected_cells))
+        
+        if not sorted_cells:
+            return
+        
+        # Group cells by row
+        rows_dict = {}
+        for row, col in sorted_cells:
+            if row not in rows_dict:
+                rows_dict[row] = []
+            rows_dict[row].append(col)
+        
+        # Build clipboard text
         lines = []
-        for item in selected_items:
-            values = self.results_tree.item(item, 'values')
-            lines.append('\t'.join(str(v) for v in values))
+        for row in sorted(rows_dict.keys()):
+            cols = sorted(rows_dict[row])
+            row_data = self.results_rows[row - 1]
+            
+            # Get cell text values
+            cell_values = []
+            for col in cols:
+                if 0 <= col < len(row_data['cells']):
+                    cell_values.append(row_data['cells'][col].cget("text"))
+            
+            lines.append('\t'.join(cell_values))
         
         text = '\n'.join(lines)
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
         
-        self.status_var.set(f"✓ Copied {len(selected_items)} row(s) to clipboard")
+        cell_count = len(self.selected_cells)
+        messagebox.showinfo("Copied", f"Copied {cell_count} cell(s) to clipboard!")
+        self.status_var.set(f"✓ Copied {cell_count} cell(s) to clipboard")
     
-    def toggle_column_selection(self, column):
-        """Toggle column selection for copying"""
-        if column in self.selected_columns:
-            self.selected_columns.remove(column)
-            # Reset to normal style
-            self.results_tree.heading(column, text=column)
-        else:
-            self.selected_columns.add(column)
-            # Highlight selected column
-            self.results_tree.heading(column, text=f"✓ {column}")
+    def select_all_results(self):
+        """Select all cells in the results table"""
+        self.clear_cell_selection()
         
-        # Update status
-        if self.selected_columns:
-            cols = ', '.join(self.selected_columns)
-            self.status_var.set(f"📋 Selected columns: {cols}")
-        else:
-            self.status_var.set("💡 Click column headers to select for copying")
+        for row_idx in range(1, len(self.results_rows) + 1):
+            for col_idx in range(7):  # 7 columns
+                self.selected_cells.add((row_idx, col_idx))
+        
+        self.highlight_selected_cells()
     
-    def copy_selected_columns_data(self):
-        """Copy only selected columns from all visible results"""
-        if not self.selected_columns:
-            messagebox.showinfo("No Columns Selected", 
-                              "Please click on column headers to select which columns to copy.")
-            return
+    def show_cell_context_menu(self, event, row, col):
+        """Show context menu on right-click"""
+        # If the right-clicked cell is not in selection, select it
+        if (row, col) not in self.selected_cells:
+            self.on_cell_click(event, row, col)
         
-        if not self.results_tree.get_children():
-            messagebox.showinfo("No Results", "No results to copy")
-            return
+        # Create context menu
+        context_menu = tk.Menu(self.root, tearoff=0)
+        context_menu.add_command(label="Copy Selected Cells", command=self.copy_selected_cells)
+        context_menu.add_command(label="Copy All Results", command=self.copy_all_results)
+        context_menu.add_separator()
+        context_menu.add_command(label="Select All (Ctrl+A)", command=self.select_all_results)
+        context_menu.add_command(label="Clear Selection (Esc)", command=self.clear_cell_selection)
         
-        # Get all columns
-        all_columns = self.results_tree['columns']
-        selected_indices = [all_columns.index(col) for col in self.selected_columns]
-        selected_indices.sort()
-        
-        # Build header
-        headers = [all_columns[i] for i in selected_indices]
-        lines = ['\t'.join(headers)]
-        
-        # Add data rows
-        for item in self.results_tree.get_children():
-            values = self.results_tree.item(item, 'values')
-            selected_values = [str(values[i]) for i in selected_indices]
-            lines.append('\t'.join(selected_values))
-        
-        text = '\n'.join(lines)
-        self.root.clipboard_clear()
-        self.root.clipboard_append(text)
-        
-        col_names = ', '.join(headers)
-        messagebox.showinfo("Copied", 
-                          f"Copied {len(lines)-1} rows with columns:\n{col_names}\n\nYou can paste directly into Excel or other spreadsheets.")
-        self.status_var.set(f"✓ Copied {len(self.selected_columns)} columns × {len(lines)-1} rows")
+        # Display menu at cursor position
+        try:
+            context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            context_menu.grab_release()
     
-    def copy_selected_rows(self, event=None):
-        """Copy selected rows with all columns"""
-        selected_items = self.results_tree.selection()
-        if not selected_items:
-            return
-        
-        lines = []
-        for item in selected_items:
-            values = self.results_tree.item(item, 'values')
-            lines.append('\t'.join(str(v) for v in values))
-        
-        text = '\n'.join(lines)
-        self.root.clipboard_clear()
-        self.root.clipboard_append(text)
-        
-        self.status_var.set(f"✓ Copied {len(selected_items)} row(s) to clipboard")
-    
-    def apply_filters(self):
-        """Apply filters to results display"""
-        if not self.all_results:
-            return
-        
-        # Clear current display
-        for item in self.results_tree.get_children():
-            self.results_tree.delete(item)
-        
-        # Filter results based on checkboxes
-        filtered_results = []
-        for result in self.all_results:
-            tag = result['tag']
-            
-            if tag == 'success' and self.filter_vars['success'].get():
-                filtered_results.append(result)
-            elif tag == 'cached' and self.filter_vars['cached'].get():
-                filtered_results.append(result)
-            elif tag == 'warning' and self.filter_vars['broad'].get():
-                filtered_results.append(result)
-            elif tag == 'error' and self.filter_vars['not_found'].get():
-                filtered_results.append(result)
-        
-        # Display filtered results
-        for rank, result in enumerate(filtered_results, 1):
-            if result['distance'] == float('inf'):
-                self.results_tree.insert('', tk.END, values=(
-                    rank,
-                    result['address'],
-                    result['suburb'],
-                    result['state'],
-                    'N/A',
-                    'N/A',
-                    result['status']
-                ), tags=(result['tag'],))
-            else:
-                tag = result['tag']
-                if tag == 'cached':
-                    display_tag = 'cached'
-                elif tag == 'normal' or tag == 'success':
-                    display_tag = 'success'
-                else:
-                    display_tag = 'warning'
-                
-                self.results_tree.insert('', tk.END, values=(
-                    rank,
-                    result['address'],
-                    result['suburb'],
-                    result['state'],
-                    f"{result['distance']:.2f}",
-                    f"{result['duration']:.0f}",
-                    result['status']
-                ), tags=(display_tag,))
-        
-        # Clear cell selection when filters change
-        self.cell_selection['selected_cells'] = set()
-        
-        # Update status
-        total = len(self.all_results)
-        showing = len(filtered_results)
-        if showing < total:
-            self.status_var.set(f"🔍 Showing {showing} of {total} results (filtered)")
-        else:
-            self.status_var.set(f"📊 Showing all {total} results")
     
     def handle_paste(self, event=None):
         """Handle paste event"""
@@ -732,7 +871,7 @@ class AddressDistanceCalculator:
         """Show hint after pasting"""
         pasted_text = self.paste_entry.get("1.0", tk.END).strip()
         if pasted_text:
-            self.status_var.set("📋 Data pasted! Click 'Add Addresses' to process")
+            self.status_var.set("📋 Data pasted! Click 'Add' to process")
     
     def parse_address_line(self, line):
         """Parse a single line of address data"""
@@ -811,9 +950,7 @@ class AddressDistanceCalculator:
                     status = '💾 Cached' if is_cached else 'Pending'
                     tag = 'cached' if is_cached else 'pending'
                     
-                    self.input_tree.insert('', tk.END, 
-                                         values=(status, address, suburb, state),
-                                         tags=(tag,))
+                    self.add_input_row(status, address, suburb, state, tag)
                     
                     site_data = {
                         'address': address,
@@ -851,28 +988,36 @@ class AddressDistanceCalculator:
                                      "Supported formats:\n" +
                                      "• Excel columns (tab-separated): Address | Suburb | State\n" +
                                      "• Comma-separated: Address, Suburb, State\n" +
-                                     "• Full address: Street, Suburb, STATE 1234\n" +
-                                     "• Line-by-line in any above format")
+                                     "• Full address: Street, Suburb, STATE 1234")
                 self.status_var.set("⚠ No valid addresses found")
     
     def remove_selected(self):
         """Remove selected addresses"""
-        selected_items = self.input_tree.selection()
-        if not selected_items:
-            messagebox.showinfo("No Selection", "Please select an address to remove")
+        # Find all selected rows
+        selected_indices = []
+        for idx, row_data in enumerate(self.input_rows):
+            if row_data['checkbox_var'].get():
+                selected_indices.append(idx)
+        
+        if not selected_indices:
+            messagebox.showinfo("No Selection", "Please select at least one address to remove by checking the checkbox(es).")
             return
         
-        removed_count = 0
-        for item in selected_items:
-            values = self.input_tree.item(item, 'values')
-            self.site_addresses = [addr for addr in self.site_addresses 
-                                   if not (addr['address'] == values[1] and 
-                                          addr['suburb'] == values[2] and 
-                                          addr['state'] == values[3])]
-            self.input_tree.delete(item)
-            removed_count += 1
+        # Confirm removal
+        count = len(selected_indices)
+        if not messagebox.askyesno("Confirm Removal", 
+                                   f"Remove {count} selected address(es)?"):
+            return
         
-        self.status_var.set(f"✓ Removed {removed_count} address(es). Total: {len(self.site_addresses)}")
+        # Remove in reverse order to maintain correct indices
+        for idx in reversed(selected_indices):
+            # Destroy the frame
+            self.input_rows[idx]['frame'].destroy()
+            # Remove from lists
+            del self.input_rows[idx]
+            del self.site_addresses[idx]
+        
+        self.status_var.set(f"✓ Removed {count} address(es). Total: {len(self.site_addresses)}")
     
     def clear_sites(self):
         """Clear all site addresses"""
@@ -880,29 +1025,17 @@ class AddressDistanceCalculator:
             if messagebox.askyesno("Confirm Clear", 
                                   f"Clear all {len(self.site_addresses)} addresses?"):
                 self.site_addresses = []
-                for item in self.input_tree.get_children():
-                    self.input_tree.delete(item)
+                self.clear_input_rows()
                 self.status_var.set("✓ All addresses cleared")
         else:
             self.status_var.set("ℹ No addresses to clear")
     
     def geocode_address_incremental(self, address, max_retries=4):
-        """
-        Geocode address with incremental broader search strategy
-        
-        Strategy:
-        1. Try exact address (e.g., "Shop 6, 5 Halley Street, Chisholm, ACT")
-        2. Remove shop/unit (e.g., "5 Halley Street, Chisholm, ACT")
-        3. Try suburb + state only (e.g., "Chisholm, ACT")
-        4. Try major landmarks if applicable (e.g., "Shopping Centre Name, Suburb, State")
-        5. Try state only as last resort (e.g., "ACT, Australia")
-        """
+        """Geocode address with incremental broader search strategy"""
         base_url = "https://nominatim.openstreetmap.org/search"
         headers = {'User-Agent': 'AddressDistanceCalculator/3.0'}
         
         parts = [p.strip() for p in address.split(',')]
-        
-        # Build search attempts from most specific to broader
         search_attempts = []
         
         # Attempt 1: Full address
@@ -912,46 +1045,20 @@ class AddressDistanceCalculator:
             'description': 'exact address'
         })
         
-        # Attempt 2: Remove shop/unit numbers and descriptors
+        # Attempt 2: Remove shop/unit numbers
         if len(parts) >= 3:
             street_part = parts[0]
-            # Remove common prefixes
             cleaned_street = re.sub(r'^(Shop|Unit|Suite|Level|T/a|Tenancy|Lot)\s*\d+[A-Za-z]?,?\s*', '', 
                                    street_part, flags=re.IGNORECASE)
-            cleaned_street = re.sub(r'^(Shops?|Units?)\s+\d+\s*[&-]\s*\d+,?\s*', '', 
-                                   cleaned_street, flags=re.IGNORECASE)
             
             if cleaned_street != street_part and cleaned_street.strip():
                 search_attempts.append({
                     'query': ', '.join([cleaned_street] + parts[1:]),
                     'level': 1,
-                    'description': 'without shop/unit number'
+                    'description': 'without shop/unit'
                 })
         
-        # Attempt 3: Extract shopping centre name if present
-        shopping_centre_match = re.search(r'([\w\s]+(?:Shopping Centre|Market|Plaza|Fair|Marketplace))', 
-                                         address, re.IGNORECASE)
-        if shopping_centre_match and len(parts) >= 2:
-            centre_name = shopping_centre_match.group(1).strip()
-            search_attempts.append({
-                'query': f"{centre_name}, {parts[-2]}, {parts[-1]}",
-                'level': 1,
-                'description': 'shopping centre with suburb'
-            })
-        
-        # Attempt 4: Street name + suburb + state (remove building number)
-        if len(parts) >= 3:
-            street_name = re.sub(r'^\d+[A-Za-z]?\s*', '', parts[0])  # Remove leading number
-            street_name = re.sub(r'^(Shop|Unit|Suite|Level|T/a|Tenancy)\s*.*?,?\s*', '', 
-                                street_name, flags=re.IGNORECASE)
-            if street_name.strip() and len(street_name.strip()) > 3:
-                search_attempts.append({
-                    'query': ', '.join([street_name.strip()] + parts[1:]),
-                    'level': 2,
-                    'description': 'street name with suburb'
-                })
-        
-        # Attempt 5: Suburb + State only (most common fallback)
+        # Attempt 3: Suburb + State only
         if len(parts) >= 2:
             search_attempts.append({
                 'query': f"{parts[-2]}, {parts[-1]}",
@@ -959,23 +1066,15 @@ class AddressDistanceCalculator:
                 'description': 'suburb and state'
             })
         
-        # Attempt 6: State + Australia (last resort)
-        if len(parts) >= 1:
-            search_attempts.append({
-                'query': f"{parts[-1]}, Australia",
-                'level': 4,
-                'description': 'state only'
-            })
-        
         # Try each search attempt
         for attempt_num, attempt in enumerate(search_attempts[:max_retries], 1):
             if attempt_num > 1:
-                time.sleep(0.5)  # Small delay between retries
+                time.sleep(0.5)
             
             params = {
                 'q': attempt['query'],
                 'format': 'json',
-                'limit': 3,  # Get top 3 results for better matching
+                'limit': 3,
                 'countrycodes': 'au',
                 'addressdetails': 1
             }
@@ -986,34 +1085,14 @@ class AddressDistanceCalculator:
                 data = response.json()
                 
                 if data:
-                    # For suburb-level searches, try to match the actual suburb
-                    if attempt['level'] >= 2 and len(parts) >= 2:
-                        suburb_to_match = parts[-2].lower().strip()
-                        
-                        # Look for best match in results
-                        for result in data:
-                            result_address = result.get('address', {})
-                            result_suburb = (result_address.get('suburb') or 
-                                           result_address.get('city') or 
-                                           result_address.get('town') or '').lower()
-                            
-                            if suburb_to_match in result_suburb or result_suburb in suburb_to_match:
-                                return (float(result['lat']), 
-                                       float(result['lon']), 
-                                       attempt['level'],
-                                       attempt['description'])
-                    
-                    # Return first result if no specific match found
                     return (float(data[0]['lat']), 
                            float(data[0]['lon']), 
                            attempt['level'],
                            attempt['description'])
-                
             except Exception as e:
-                print(f"Attempt {attempt_num} failed for '{attempt['query']}': {e}")
+                print(f"Attempt {attempt_num} failed: {e}")
                 continue
         
-        # All attempts failed
         return None, None, None, None
     
     def get_osrm_route(self, coord1, coord2):
@@ -1023,10 +1102,7 @@ class AddressDistanceCalculator:
             lon2, lat2 = coord2[1], coord2[0]
             
             url = f"http://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}"
-            params = {
-                'overview': 'false',
-                'steps': 'false'
-            }
+            params = {'overview': 'false', 'steps': 'false'}
             
             response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
@@ -1047,18 +1123,10 @@ class AddressDistanceCalculator:
             duration_min = (distance_km / 50) * 60
             return distance_km, duration_min
     
-    def update_input_tree_status(self, address, suburb, state, status, tag):
-        """Update status in input tree"""
-        for item in self.input_tree.get_children():
-            values = self.input_tree.item(item, 'values')
-            if values[1] == address and values[2] == suburb and values[3] == state:
-                self.input_tree.item(item, values=(status, address, suburb, state), tags=(tag,))
-                break
-    
     def calculate_distances_worker(self, tech_addr):
         """Worker function for calculating distances in a separate thread"""
         try:
-            self.result_queue.put(('status', "🔍 Geocoding technician address..."))
+            self.result_queue.put(('status', "Geocoding technician address..."))
             tech_lat, tech_lon, tech_level, tech_desc = self.geocode_address_incremental(tech_addr)
             
             if not tech_lat:
@@ -1066,7 +1134,7 @@ class AddressDistanceCalculator:
                 return
             
             tech_coords = (tech_lat, tech_lon)
-            self.result_queue.put(('progress', 1))
+            self.result_queue.put(('progress', 0.05))
             time.sleep(0.5)
             
             results = []
@@ -1077,7 +1145,7 @@ class AddressDistanceCalculator:
                     self.result_queue.put(('status', "❌ Calculation cancelled"))
                     return
                 
-                progress_percent = int(((i + 1) / total) * 100)
+                progress_value = 0.05 + (i + 1) / total * 0.95
                 full_address = f"{site['address']}, {site['suburb']}, {site['state']}"
                 cache_key = full_address.lower()
                 
@@ -1087,96 +1155,66 @@ class AddressDistanceCalculator:
                     match_level = site.get('match_level', 0)
                     match_desc = site.get('match_desc', 'exact')
                     
-                    self.result_queue.put(('status', f"💾 Using cached data ({progress_percent}%): {site['suburb']}"))
+                    self.result_queue.put(('status', f"💾 Using cached data: {site['suburb']}"))
                     
                     site_coords = (site_lat, site_lon)
                     distance_km, duration_min = self.get_osrm_route(tech_coords, site_coords)
                     
-                    # Determine status based on match level
-                    if match_level == 0:
-                        status = "💾 Cached"
-                        tag = 'cached'
-                    else:
-                        status = f"💾 Cached ({match_desc})"
-                        tag = 'cached'
-                    
-                    result = {
-                        'address': site['address'],
-                        'suburb': site['suburb'],
-                        'state': site['state'],
-                        'distance': distance_km,
-                        'duration': duration_min,
-                        'status': status,
-                        'tag': tag,
-                        'match_level': match_level
-                    }
-                    results.append(result)
-                    self.result_queue.put(('update_input', (site['address'], site['suburb'], site['state'], status, tag)))
-                    self.result_queue.put(('progress', i + 2))
-                    continue
-                
-                self.result_queue.put(('status', f"⏳ Geocoding ({progress_percent}%): {site['suburb']}"))
-                
-                site_lat, site_lon, match_level, match_desc = self.geocode_address_incremental(full_address)
-                
-                if site_lat and site_lon:
-                    site_coords = (site_lat, site_lon)
-                    distance_km, duration_min = self.get_osrm_route(tech_coords, site_coords)
-                    
-                    self.geocode_cache[cache_key] = {
-                        'lat': site_lat,
-                        'lon': site_lon,
-                        'match_level': match_level,
-                        'match_desc': match_desc
-                    }
-                    
-                    site['lat'] = site_lat
-                    site['lon'] = site_lon
-                    site['match_level'] = match_level
-                    site['match_desc'] = match_desc
-                    site['status'] = 'geocoded'
-                    
-                    # Determine status based on match quality
-                    if match_level == 0:
-                        status = "✓ Found (exact)"
-                        tag = 'success'
-                    elif match_level == 1:
-                        status = f"✓ Found ({match_desc})"
-                        tag = 'success'
-                    elif match_level == 2:
-                        status = f"⚠ Approximate ({match_desc})"
-                        tag = 'warning'
-                    else:
-                        status = f"⚠ Broad ({match_desc})"
-                        tag = 'warning'
-                    
-                    result = {
-                        'address': site['address'],
-                        'suburb': site['suburb'],
-                        'state': site['state'],
-                        'distance': distance_km,
-                        'duration': duration_min,
-                        'status': status,
-                        'tag': tag,
-                        'match_level': match_level
-                    }
-                    results.append(result)
-                    self.result_queue.put(('update_input', (site['address'], site['suburb'], site['state'], status, tag)))
+                    status = "💾 Cached"
+                    tag = 'cached'
                 else:
-                    result = {
-                        'address': site['address'],
-                        'suburb': site['suburb'],
-                        'state': site['state'],
-                        'distance': float('inf'),
-                        'duration': float('inf'),
-                        'status': '✗ Not Found',
-                        'tag': 'error',
-                        'match_level': 999
-                    }
-                    results.append(result)
-                    self.result_queue.put(('update_input', (site['address'], site['suburb'], site['state'], '✗ Not Found', 'error')))
+                    self.result_queue.put(('status', f"⏳ Geocoding: {site['suburb']}"))
+                    
+                    site_lat, site_lon, match_level, match_desc = self.geocode_address_incremental(full_address)
+                    
+                    if site_lat and site_lon:
+                        site_coords = (site_lat, site_lon)
+                        distance_km, duration_min = self.get_osrm_route(tech_coords, site_coords)
+                        
+                        self.geocode_cache[cache_key] = {
+                            'lat': site_lat,
+                            'lon': site_lon,
+                            'match_level': match_level,
+                            'match_desc': match_desc
+                        }
+                        
+                        site['lat'] = site_lat
+                        site['lon'] = site_lon
+                        site['match_level'] = match_level
+                        site['match_desc'] = match_desc
+                        
+                        if match_level == 0:
+                            status = "✓ Found (exact)"
+                            tag = 'success'
+                        elif match_level <= 2:
+                            status = f"✓ Found ({match_desc})"
+                            tag = 'success'
+                        else:
+                            status = f"⚠ Broad ({match_desc})"
+                            tag = 'warning'
+                    else:
+                        distance_km = float('inf')
+                        duration_min = float('inf')
+                        status = '✗ Not Found'
+                        tag = 'error'
+                        match_level = 999
                 
-                self.result_queue.put(('progress', i + 2))
+                result = {
+                    'address': site['address'],
+                    'suburb': site['suburb'],
+                    'state': site['state'],
+                    'distance': distance_km,
+                    'duration': duration_min,
+                    'status': status,
+                    'tag': tag,
+                    'match_level': match_level
+                }
+                results.append(result)
+                
+                # Update the input row status in the UI
+                self.result_queue.put(('update_row', (i, status, tag)))
+                
+                self.result_queue.put(('progress', progress_value))
                 time.sleep(0.5)
             
             results.sort(key=lambda x: x['distance'])
@@ -1195,9 +1233,7 @@ class AddressDistanceCalculator:
                 if msg_type == 'status':
                     self.status_var.set(data)
                 elif msg_type == 'progress':
-                    self.progress['value'] = data
-                elif msg_type == 'update_input':
-                    self.update_input_tree_status(*data)
+                    self.progress.set(data)
                 elif msg_type == 'results':
                     self.all_results = data
                     self.apply_filters()
@@ -1205,6 +1241,10 @@ class AddressDistanceCalculator:
                     self.calculation_complete()
                 elif msg_type == 'error':
                     self.handle_calculation_error(data)
+                elif msg_type == 'update_row':
+                    # Update the status of an input row
+                    row_index, status, tag = data
+                    self.update_input_row_status(row_index, status, tag)
         except:
             pass
         
@@ -1213,13 +1253,12 @@ class AddressDistanceCalculator:
     def calculation_complete(self):
         """Handle calculation completion"""
         self.progress.grid_remove()
-        self.calc_btn.config(state=tk.NORMAL)
+        self.calc_btn.configure(state="normal")
         
-        # Count by category
         counts = {
             'success': sum(1 for r in self.all_results if r['tag'] == 'success'),
             'cached': sum(1 for r in self.all_results if r['tag'] == 'cached'),
-            'retry': sum(1 for r in self.all_results if r['tag'] == 'warning'),
+            'warning': sum(1 for r in self.all_results if r['tag'] == 'warning'),
             'error': sum(1 for r in self.all_results if r['tag'] == 'error')
         }
         
@@ -1228,34 +1267,60 @@ class AddressDistanceCalculator:
             summary_parts.append(f"{counts['success']} found")
         if counts['cached'] > 0:
             summary_parts.append(f"{counts['cached']} cached")
-        if counts['retry'] > 0:
-            summary_parts.append(f"{counts['retry']} broad matches")
+        if counts['warning'] > 0:
+            summary_parts.append(f"{counts['warning']} broad")
         if counts['error'] > 0:
             summary_parts.append(f"{counts['error']} not found")
         
         summary = f"✓ Complete! " + ", ".join(summary_parts)
         self.status_var.set(summary)
-        
-        if counts['error'] > 0 or counts['cached'] > 0:
-            msg_parts = ["Calculation complete!\n"]
-            if counts['success'] > 0:
-                msg_parts.append(f"✓ Successfully geocoded: {counts['success']}")
-            if counts['cached'] > 0:
-                msg_parts.append(f"💾 Used cached data: {counts['cached']}")
-            if counts['retry'] > 0:
-                msg_parts.append(f"⚠ Broad matches: {counts['retry']}")
-            if counts['error'] > 0:
-                msg_parts.append(f"✗ Not found: {counts['error']}")
-            msg_parts.append("\nUse filters to show/hide specific result types.")
-            
-            messagebox.showinfo("Results Summary", "\n".join(msg_parts))
     
     def handle_calculation_error(self, error_msg):
         """Handle calculation errors"""
         self.progress.grid_remove()
-        self.calc_btn.config(state=tk.NORMAL)
+        self.calc_btn.configure(state="normal")
         messagebox.showerror("Calculation Error", error_msg)
         self.status_var.set(f"✗ Error: {error_msg}")
+    
+    def apply_filters(self):
+        """Apply filters to results display"""
+        if not self.all_results:
+            return
+        
+        self.clear_results_rows()
+        
+        filtered_results = []
+        for result in self.all_results:
+            tag = result['tag']
+            
+            if tag == 'success' and self.filter_vars['success'].get():
+                filtered_results.append(result)
+            elif tag == 'cached' and self.filter_vars['cached'].get():
+                filtered_results.append(result)
+            elif tag == 'warning' and self.filter_vars['broad'].get():
+                filtered_results.append(result)
+            elif tag == 'error' and self.filter_vars['not_found'].get():
+                filtered_results.append(result)
+        
+        for rank, result in enumerate(filtered_results, 1):
+            if result['distance'] == float('inf'):
+                self.add_result_row(
+                    rank, result['address'], result['suburb'], result['state'],
+                    'N/A', 'N/A', result['status'], result['tag']
+                )
+            else:
+                self.add_result_row(
+                    rank, result['address'], result['suburb'], result['state'],
+                    f"{result['distance']:.2f}", f"{result['duration']:.0f}",
+                    result['status'], result['tag']
+                )
+        
+        total = len(self.all_results)
+        showing = len(filtered_results)
+        if showing < total:
+            self.status_var.set(f"🔍 Showing {showing} of {total} results (filtered)")
+        else:
+            self.status_var.set(f"📊 Showing all {total} results")
     
     def calculate_distances(self):
         """Start distance calculation in a separate thread"""
@@ -1273,15 +1338,9 @@ class AddressDistanceCalculator:
             messagebox.showwarning("Busy", "Calculation already in progress")
             return
         
-        addresses_to_geocode = [s for s in self.site_addresses 
-                                if 'lat' not in s or 'lon' not in s or not s.get('lat') or not s.get('lon')]
-        
         self.progress.grid()
-        total_steps = len(addresses_to_geocode) + 1
-        self.progress['maximum'] = total_steps
-        self.progress['value'] = 0
-        
-        self.calc_btn.config(state=tk.DISABLED)
+        self.progress.set(0)
+        self.calc_btn.configure(state="disabled")
         
         self.stop_calculation = False
         self.calculation_thread = threading.Thread(
@@ -1290,8 +1349,37 @@ class AddressDistanceCalculator:
             daemon=True
         )
         self.calculation_thread.start()
+    
+    def copy_results_smart(self):
+        """Smart copy - copies selected cells if any, otherwise copies all results"""
+        if self.selected_cells:
+            self.copy_selected_cells()
+        else:
+            self.copy_all_results()
+    
+    def copy_all_results(self):
+        """Copy all results to clipboard"""
+        if not self.all_results:
+            messagebox.showinfo("No Results", "No results to copy")
+            return
+        
+        lines = ["Rank\tAddress\tSuburb\tState\tDistance (km)\tDuration (min)\tStatus"]
+        
+        for rank, result in enumerate(self.all_results, 1):
+            if result['distance'] == float('inf'):
+                line = f"{rank}\t{result['address']}\t{result['suburb']}\t{result['state']}\tN/A\tN/A\t{result['status']}"
+            else:
+                line = f"{rank}\t{result['address']}\t{result['suburb']}\t{result['state']}\t{result['distance']:.2f}\t{result['duration']:.0f}\t{result['status']}"
+            lines.append(line)
+        
+        text = '\n'.join(lines)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        
+        messagebox.showinfo("Copied", f"Copied {len(self.all_results)} results to clipboard!")
+        self.status_var.set(f"✓ Copied {len(self.all_results)} results to clipboard")
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = AddressDistanceCalculator(root)
-    root.mainloop()
+    app = ctk.CTk()
+    calculator = AddressDistanceCalculator(app)
+    app.mainloop()
