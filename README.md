@@ -8,11 +8,12 @@ A modern, user-friendly desktop application for calculating distances between a 
 
 ## ✨ Features
 
-### 🎨 Modern Glass Morphism Design
-- Sleek dark theme with glass-effect panels
-- Professional color scheme with indigo accents
+### 🎨 Modern CustomTkinter Design
+- Sleek dark/light theme toggle with glass-effect panels
+- Professional color scheme with modern blue accents
 - Smooth hover effects and modern typography
 - Responsive layout that adapts to window resizing
+- Built with CustomTkinter for enhanced UI components
 
 ### 📋 Flexible Address Input
 Support for multiple paste formats:
@@ -26,14 +27,19 @@ Support for multiple paste formats:
 ### ⚡ Smart Geocoding with Caching
 - Intelligent address geocoding using OpenStreetMap Nominatim API
 - Automatic retry with broader search if exact match fails
+- **Persistent cache storage** - geocoded addresses saved between sessions
 - Built-in caching system - previously geocoded addresses are processed instantly
 - Visual indicators for cached vs. newly geocoded addresses
 - Respects API rate limits automatically
+- Cache stored in user's home directory: `~/.address_distance_cache.json`
 
 ### 📊 Comprehensive Results
-- Distance calculation in kilometers
-- Estimated travel duration (based on 50 km/h average)
+- **Actual route distances** using OSRM routing engine
+- **Accurate travel duration** based on real road networks
 - Ranked results sorted by distance
+- **Excel-like table** with selectable cells, rows, and columns
+- **Smart copy** - Copy selected cells or entire results to clipboard
+- **Filtering options** - Show/hide results by status type
 - Color-coded status indicators:
   - 🟢 **Green** - Successfully geocoded
   - 🔵 **Blue** - Cached (instant results)
@@ -41,11 +47,20 @@ Support for multiple paste formats:
   - 🔴 **Red** - Address not found
 
 ### 🛠️ Additional Features
-- Duplicate address detection
-- Bulk address management (add, remove, clear all)
-- Real-time progress tracking
-- Export-ready results table
-- Responsive status messages
+- **Dark/Light theme toggle** - Switch between themes with a single click
+- **Excel-like cell selection** - Select individual cells, rows, or columns in results
+- **Smart copy functionality** - Copy selected cells or all results with Ctrl+C
+- **Keyboard shortcuts** - Ctrl+A (select all), Ctrl+C (copy), Esc (clear selection)
+- **Result filtering** - Filter results by status (Found, Cached, Broad, Not Found)
+- **Auto-formatting** - Technician address auto-formats on paste
+- **Real-time routing** - Uses OSRM for accurate route distances and durations
+- **Duration formatting** - Smart formatting (e.g., "1 hr 30 min" or "45 min")
+- **Threaded calculations** - Non-blocking UI during geocoding operations
+- **Duplicate address detection**
+- **Bulk address management** (add, remove, clear all)
+- **Real-time progress tracking**
+- **Context menu** - Right-click for quick actions on results
+- **Responsive status messages**
 
 ## 🚀 Installation
 
@@ -55,7 +70,7 @@ Support for multiple paste formats:
 
 ### Required Dependencies
 ```bash
-pip install requests geopy
+pip install requests geopy customtkinter
 ```
 
 ### Clone the Repository
@@ -92,9 +107,20 @@ python main.py
    - View ranked results sorted by distance
 
 4. **Manage Addresses**
-   - Select and remove individual addresses with "❌ Remove Selected"
-   - Clear all addresses with "🗑️ Clear All"
+   - Select and remove individual addresses with "✖ Remove"
+   - Clear all addresses with "🗑 Clear All"
    - Previously calculated addresses use cached data for instant recalculation
+
+5. **Work with Results**
+   - Click on individual cells, drag to select ranges, or click column headers
+   - Use Ctrl+A to select all results
+   - Press Ctrl+C to copy selected cells or all results
+   - Right-click for context menu with copy options
+   - Filter results by clicking checkboxes (Found, Cached, Broad, Not Found)
+
+6. **Toggle Theme**
+   - Click the theme toggle button in the top-right corner
+   - Switch between light and dark modes for comfortable viewing
 
 ### Example Input Formats
 
@@ -132,20 +158,23 @@ python main.py
 - **UI Framework** - Modern Tkinter with custom styling
 
 ### Key Technologies
-- **Tkinter** - Native Python GUI framework
+- **CustomTkinter** - Modern Python GUI framework with native look
 - **geopy** - Geocoding and distance calculations
 - **requests** - HTTP client for API calls
 - **OpenStreetMap Nominatim** - Free geocoding service
+- **OSRM** - Open Source Routing Machine for accurate route calculations
+- **Threading** - Non-blocking UI during long operations
 
 ## 🎨 UI Design Philosophy
 
-The application uses a modern glass-morphism design with:
-- Dark gradient background (#1a1a2e)
-- White glass-effect panels
-- Indigo accent colors (#6366f1)
+The application uses a modern CustomTkinter design with:
+- Dark/light theme support with smooth transitions
+- Glass-effect panels with semi-transparent backgrounds
+- Modern blue accent colors
 - Professional Segoe UI typography
-- Smooth hover transitions
+- Smooth hover transitions and animations
 - Color-coded status indicators
+- Excel-like table with cell selection capabilities
 
 ## 🔧 Configuration
 
@@ -156,8 +185,9 @@ The application uses OpenStreetMap's Nominatim API with these defaults:
 - **Retry Logic**: Automatic broader search on failure
 
 ### Distance Calculation
-- **Method**: Geodesic distance (great-circle distance)
-- **Speed Estimate**: 50 km/h average for duration calculation
+- **Method**: OSRM (Open Source Routing Machine) for actual route distances
+- **Fallback**: Geodesic distance (great-circle distance) if OSRM unavailable
+- **Duration**: Calculated from actual route data via OSRM API
 
 ## 📝 Development
 
@@ -172,11 +202,14 @@ python-simple-distance-calculator/
 ```
 
 ### Code Highlights
-- Modern Python with type hints ready
+- Modern Python with threading for non-blocking operations
+- CustomTkinter for enhanced UI components
 - Comprehensive error handling
 - Clean separation of concerns
+- Queue-based thread communication
 - Extensive inline documentation
 - User-friendly status messages
+- Excel-like table interaction model
 
 ## 🤝 Contributing
 
@@ -194,6 +227,8 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## 🙏 Acknowledgments
 
 - **OpenStreetMap** - For providing free geocoding services
+- **OSRM** - For providing free routing and distance calculations
+- **CustomTkinter** - For modern UI components
 - **geopy** - For distance calculation utilities
 - **Python Community** - For excellent documentation and support
 
@@ -206,15 +241,21 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 🔮 Future Enhancements
 
-- [ ] Export results to CSV/Excel
-- [ ] Import addresses from files
-- [ ] Customizable speed estimates
-- [ ] Map visualization
-- [ ] Route optimization
+- [ ] Export results to CSV/Excel files
+- [ ] Import addresses from CSV/Excel files
+- [ ] Customizable speed estimates for manual calculation mode
+- [ ] Interactive map visualization of routes
+- [ ] Route optimization (traveling salesman problem)
 - [ ] Support for multiple technicians
-- [ ] Persistent cache storage
-- [ ] Configuration file support
-- [ ] Dark/light theme toggle
+- [x] Persistent cache storage
+- [ ] Configuration file support for settings
+- [x] Dark/light theme toggle
+- [x] Excel-like cell selection and copying
+- [x] Result filtering by status
+- [x] OSRM integration for accurate routing
+- [x] Threaded calculations
+- [x] Smart duration formatting
+- [x] Context menu for results
 
 ## 📧 Contact
 
