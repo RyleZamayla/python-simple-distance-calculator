@@ -8,10 +8,15 @@ import json
 import re
 import threading
 from queue import Queue
+import os
+from pathlib import Path
 
 # Configure CustomTkinter
 ctk.set_appearance_mode("dark")  # "dark" or "light"
 ctk.set_default_color_theme("blue")  # "blue", "green", "dark-blue"
+
+# Cache file location
+CACHE_FILE = Path.home() / ".address_distance_cache.json"
 
 class GlassFrame(ctk.CTkFrame):
     """Custom glassmorphic frame with semi-transparent effect"""
@@ -33,8 +38,8 @@ class AddressDistanceCalculator:
     def __init__(self, root):
         self.root = root
         self.root.title("Address Distance Calculator")
-        self.root.geometry("1000x650")
-        self.root.minsize(900, 600)
+        self.root.geometry("1200x700")
+        self.root.minsize(1100, 650)
         
         # Theme state
         self.current_theme = "dark"
@@ -58,6 +63,9 @@ class AddressDistanceCalculator:
         self.site_addresses = []
         self.geocode_cache = {}
         self.all_results = []
+        
+        # Load persistent cache
+        self.load_cache()
         
         # Filter states
         self.filter_vars = {
@@ -88,6 +96,9 @@ class AddressDistanceCalculator:
         self.root.bind('<Control-c>', lambda e: self.copy_results_smart())
         self.root.bind('<Escape>', lambda e: self.clear_cell_selection())
         
+        # Save cache on window close
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
         # Start result queue processor
         self.process_queue()
     
@@ -99,8 +110,8 @@ class AddressDistanceCalculator:
         
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_rowconfigure(0, weight=1)
-        main_frame.grid_columnconfigure(0, weight=1)
-        main_frame.grid_columnconfigure(1, weight=1)
+        main_frame.grid_columnconfigure(0, weight=1)  # Left column (input section)
+        main_frame.grid_columnconfigure(1, weight=3)  # Right column (results) - 3x more space
         
         # Title Section - compact with theme toggle
         title_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
@@ -169,6 +180,10 @@ class AddressDistanceCalculator:
         )
         self.tech_address.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
         
+        # Bind paste event to auto-format technician address
+        self.tech_address.bind('<<Paste>>', self.handle_tech_address_paste)
+        self.tech_address.bind('<KeyRelease>', self.auto_format_tech_address)
+        
         # Site Addresses Section
         site_frame = GlassFrame(left_column, glass_color=self.colors['glass_bg'])
         site_frame.grid(row=1, column=0, sticky="nsew", pady=(0, 10))
@@ -217,7 +232,7 @@ class AddressDistanceCalculator:
         
         # Compact headers for input table with checkbox column
         headers = ["", "Status", "Address", "Suburb", "State"]
-        widths = [30, 80, 230, 100, 55]
+        widths = [30, 90, 280, 120, 60]
         for idx, (header, width) in enumerate(zip(headers, widths)):
             anchor = "w" if idx == 2 else "center"
             ctk.CTkLabel(
@@ -257,59 +272,61 @@ class AddressDistanceCalculator:
         button_frame.grid(row=3, column=0, sticky="ew", pady=(0, 10), padx=12)
         button_frame.grid_columnconfigure(0, weight=1)
         
-        # Top row - Add, Remove, Clear buttons
-        top_btn_frame = ctk.CTkFrame(button_frame, fg_color="transparent")
-        top_btn_frame.grid(row=0, column=0, sticky="ew", pady=(0, 5))
-        top_btn_frame.grid_columnconfigure((0, 1, 2), weight=1)
+        # Single row - all buttons together
+        btn_row_frame = ctk.CTkFrame(button_frame, fg_color="transparent")
+        btn_row_frame.grid(row=0, column=0, sticky="w")
         
         self.add_btn = ctk.CTkButton(
-            top_btn_frame,
+            btn_row_frame,
             text="➕ Add",
             command=self.process_pasted_data,
+            width=100,
             height=34,
             corner_radius=8,
             fg_color="#27ae60",
             hover_color="#229954",
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold")
         )
-        self.add_btn.grid(row=0, column=0, sticky="ew", padx=2)
+        self.add_btn.pack(side="left", padx=2)
         
         self.remove_btn = ctk.CTkButton(
-            top_btn_frame,
+            btn_row_frame,
             text="✖ Remove",
             command=self.remove_selected,
+            width=110,
             height=34,
             corner_radius=8,
             fg_color="#e74c3c",
             hover_color="#c0392b",
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold")
         )
-        self.remove_btn.grid(row=0, column=1, sticky="ew", padx=2)
+        self.remove_btn.pack(side="left", padx=2)
         
         self.clear_btn = ctk.CTkButton(
-            top_btn_frame,
+            btn_row_frame,
             text="🗑 Clear All",
             command=self.clear_sites,
+            width=110,
             height=34,
             corner_radius=8,
             fg_color="#e67e22",
             hover_color="#d35400",
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold")
         )
-        self.clear_btn.grid(row=0, column=2, sticky="ew", padx=2)
+        self.clear_btn.pack(side="left", padx=2)
         
-        # Bottom row - Calculate button (full width)
         self.calc_btn = ctk.CTkButton(
-            button_frame,
+            btn_row_frame,
             text="🚀 Calculate Distances",
             command=self.calculate_distances,
-            height=38,
+            width=180,
+            height=34,
             corner_radius=8,
             fg_color="#3282b8",
             hover_color="#0f4c75",
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold")
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold")
         )
-        self.calc_btn.grid(row=1, column=0, sticky="ew")
+        self.calc_btn.pack(side="left", padx=2)
         
         # RIGHT COLUMN - Results Section
         right_column = ctk.CTkFrame(main_frame, fg_color="transparent")
@@ -433,12 +450,12 @@ class AddressDistanceCalculator:
         self.results_scroll.grid_columnconfigure(1, weight=1)
         
         # Compact headers for results table with click selection
-        result_headers = ["Rank", "Address", "Suburb", "State", "Dist(km)", "Time(min)", "Status"]
-        result_widths = [45, 200, 90, 50, 75, 80, 120]
+        result_headers = ["Rank", "Address", "Suburb", "State", "Dist(km)", "Distance(min)", "Status"]
+        result_widths = [45, 280, 110, 60, 75, 100, 140]
         self.result_header_labels = []
         
         for idx, (header, width) in enumerate(zip(result_headers, result_widths)):
-            anchor = "w" if idx == 1 else "center"
+            anchor = "w"  # Align all headers to the left
             header_label = ctk.CTkLabel(
                 self.results_scroll, 
                 text=header,
@@ -447,7 +464,7 @@ class AddressDistanceCalculator:
                 anchor=anchor,
                 cursor="hand2"
             )
-            header_label.grid(row=0, column=idx, padx=2, pady=3, sticky="w" if idx == 1 else "")
+            header_label.grid(row=0, column=idx, padx=2, pady=3, sticky="w")
             header_label.bind("<Button-1>", lambda e, col=idx: self.select_column(col))
             self.result_header_labels.append(header_label)
         
@@ -515,6 +532,33 @@ class AddressDistanceCalculator:
         # This method can be extended to update specific elements if needed
         pass
     
+    def load_cache(self):
+        """Load geocoding cache from persistent storage"""
+        try:
+            if CACHE_FILE.exists():
+                with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+                    self.geocode_cache = json.load(f)
+                print(f"✓ Loaded {len(self.geocode_cache)} cached addresses from {CACHE_FILE}")
+            else:
+                print("ℹ No cache file found, starting with empty cache")
+        except Exception as e:
+            print(f"⚠ Error loading cache: {e}")
+            self.geocode_cache = {}
+    
+    def save_cache(self):
+        """Save geocoding cache to persistent storage"""
+        try:
+            with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+                json.dump(self.geocode_cache, f, indent=2, ensure_ascii=False)
+            print(f"✓ Saved {len(self.geocode_cache)} addresses to cache")
+        except Exception as e:
+            print(f"⚠ Error saving cache: {e}")
+    
+    def on_closing(self):
+        """Handle application closing - save cache and cleanup"""
+        self.save_cache()
+        self.root.destroy()
+    
     def create_legend_item(self, parent, text, color):
         """Create a compact squared legend item"""
         frame = ctk.CTkFrame(parent, fg_color=color, corner_radius=3, height=20, width=20)
@@ -569,16 +613,16 @@ class AddressDistanceCalculator:
             var.set(not var.get())
         
         # Create status label and keep reference for updates
-        status_label = ctk.CTkLabel(row_frame, text=status, width=80, font=ctk.CTkFont(size=10), text_color=fg_color)
+        status_label = ctk.CTkLabel(row_frame, text=status, width=90, font=ctk.CTkFont(size=10), text_color=fg_color)
         status_label.grid(row=0, column=1, padx=3)
         
-        address_label = ctk.CTkLabel(row_frame, text=address, width=230, font=ctk.CTkFont(size=10), anchor="w")
+        address_label = ctk.CTkLabel(row_frame, text=address, width=280, font=ctk.CTkFont(size=10), anchor="w")
         address_label.grid(row=0, column=2, padx=3, sticky="w")
         
-        suburb_label = ctk.CTkLabel(row_frame, text=suburb, width=100, font=ctk.CTkFont(size=10))
+        suburb_label = ctk.CTkLabel(row_frame, text=suburb, width=120, font=ctk.CTkFont(size=10))
         suburb_label.grid(row=0, column=3, padx=3)
         
-        state_label = ctk.CTkLabel(row_frame, text=state, width=55, font=ctk.CTkFont(size=10))
+        state_label = ctk.CTkLabel(row_frame, text=state, width=60, font=ctk.CTkFont(size=10))
         state_label.grid(row=0, column=4, padx=3)
         
         # Bind click events to row frame and all labels (but not checkbox)
@@ -618,6 +662,23 @@ class AddressDistanceCalculator:
         status_label = self.input_rows[row_index]['status_label']
         status_label.configure(text=status, text_color=fg_color)
     
+    def format_duration(self, minutes):
+        """Format duration from minutes to 'X hr Y min' or 'Y min' format"""
+        if isinstance(minutes, str):
+            return minutes  # Return as-is if it's already a string (like 'N/A')
+        
+        total_minutes = int(round(minutes))
+        hours = total_minutes // 60
+        mins = total_minutes % 60
+        
+        if hours > 0:
+            if mins > 0:
+                return f"{hours} hr {mins} min"
+            else:
+                return f"{hours} hr"
+        else:
+            return f"{mins} min"
+    
     def add_result_row(self, rank, address, suburb, state, distance, duration, status, tag='success'):
         """Add a row to the results table with selectable cells"""
         row_num = len(self.results_rows) + 1
@@ -637,15 +698,15 @@ class AddressDistanceCalculator:
         row_frame.grid(row=row_num, column=0, columnspan=7, sticky="ew", pady=2)
         row_frame.grid_columnconfigure(1, weight=1)
         
-        # Cell data and configuration
+        # Cell data and configuration - all aligned to the left
         cell_data = [
-            (str(rank), 45, ctk.CTkFont(size=10, weight="bold"), ("#2c3e50", "#ecf0f1"), "center"),
-            (address, 200, ctk.CTkFont(size=10), None, "w"),
-            (suburb, 90, ctk.CTkFont(size=10), None, "center"),
-            (state, 50, ctk.CTkFont(size=10), None, "center"),
-            (distance, 75, ctk.CTkFont(size=10), "#3498db", "center"),
-            (duration, 80, ctk.CTkFont(size=10), "#3498db", "center"),
-            (status, 120, ctk.CTkFont(size=10, weight="bold"), fg_color, "center")
+            (str(rank), 45, ctk.CTkFont(size=10, weight="bold"), ("#2c3e50", "#ecf0f1"), "w"),
+            (address, 280, ctk.CTkFont(size=10), None, "w"),
+            (suburb, 110, ctk.CTkFont(size=10), None, "w"),
+            (state, 60, ctk.CTkFont(size=10), None, "w"),
+            (distance, 75, ctk.CTkFont(size=10), "#3498db", "w"),
+            (duration, 100, ctk.CTkFont(size=10), "#3498db", "w"),
+            (status, 140, ctk.CTkFont(size=10, weight="bold"), fg_color, "w")
         ]
         
         cells = []
@@ -662,7 +723,7 @@ class AddressDistanceCalculator:
             if text_color:
                 cell_label.configure(text_color=text_color)
             
-            cell_label.grid(row=0, column=col_idx, padx=2, sticky="w" if anchor == "w" else "")
+            cell_label.grid(row=0, column=col_idx, padx=2, sticky="w")
             
             # Bind mouse events for selection
             cell_label.bind("<Button-1>", lambda e, r=row_num, c=col_idx: self.on_cell_click(e, r, c))
@@ -866,6 +927,47 @@ class AddressDistanceCalculator:
         """Handle paste event"""
         self.root.after(100, self.auto_process_hint)
         return None
+    
+    def handle_tech_address_paste(self, event=None):
+        """Handle paste event for technician address with auto-formatting"""
+        self.root.after(100, self.auto_format_tech_address)
+        return None
+    
+    def auto_format_tech_address(self, event=None):
+        """Auto-format the technician address by cleaning up whitespace, newlines, and tabs"""
+        current_text = self.tech_address.get("1.0", tk.END).strip()
+        
+        if not current_text:
+            return
+        
+        # Replace tabs with commas (for Excel column data)
+        formatted_text = current_text.replace('\t', ', ')
+        
+        # Replace newlines with commas
+        formatted_text = formatted_text.replace('\n', ', ')
+        formatted_text = formatted_text.replace('\r', '')
+        
+        # Remove double commas
+        while ', , ' in formatted_text:
+            formatted_text = formatted_text.replace(', , ', ', ')
+        
+        # Remove multiple consecutive whitespaces
+        formatted_text = re.sub(r'\s+', ' ', formatted_text)
+        
+        # Remove spaces before commas
+        formatted_text = re.sub(r'\s+,', ',', formatted_text)
+        
+        # Ensure single space after commas
+        formatted_text = re.sub(r',\s*', ', ', formatted_text)
+        
+        # Remove leading/trailing commas and whitespace
+        formatted_text = formatted_text.strip(', ').strip()
+        
+        # Only update if the text changed to avoid infinite loops
+        if formatted_text != current_text:
+            self.tech_address.delete("1.0", tk.END)
+            self.tech_address.insert("1.0", formatted_text)
+            self.status_var.set("✓ Technician address auto-formatted")
     
     def auto_process_hint(self):
         """Show hint after pasting"""
@@ -1255,6 +1357,9 @@ class AddressDistanceCalculator:
         self.progress.grid_remove()
         self.calc_btn.configure(state="normal")
         
+        # Save cache after calculation completes
+        self.save_cache()
+        
         counts = {
             'success': sum(1 for r in self.all_results if r['tag'] == 'success'),
             'cached': sum(1 for r in self.all_results if r['tag'] == 'cached'),
@@ -1309,9 +1414,11 @@ class AddressDistanceCalculator:
                     'N/A', 'N/A', result['status'], result['tag']
                 )
             else:
+                # Format duration using the new format_duration method
+                formatted_duration = self.format_duration(result['duration'])
                 self.add_result_row(
                     rank, result['address'], result['suburb'], result['state'],
-                    f"{result['distance']:.2f}", f"{result['duration']:.0f}",
+                    f"{result['distance']:.2f}", formatted_duration,
                     result['status'], result['tag']
                 )
         
